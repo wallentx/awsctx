@@ -22,10 +22,6 @@ else
     nc=$(tput sgr0)      # No Color / Reset
 fi
 
-# Source bashmenu.sh
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/bashmenu/bashmenu.sh"
-
 # Message printing function
 printMsg() {
     local level="$1"
@@ -65,9 +61,6 @@ printMsg() {
             ;;
     esac
 }
-
-# Version information
-VERSION="1.0.0"
 
 # Initialize variables
 DEBUG=false
@@ -142,7 +135,7 @@ load_config() {
 
   # Check if config file is readable
   if [[ ! -r "$config_file" ]]; then
-    printMsg "error" "Config file exists but is not readable: $config_file" "😢"
+    printMsg "error" "Config file exists but is not readable: $config_file" "��"
     exit 1
   fi
 
@@ -157,15 +150,26 @@ load_config() {
 
   # Validate required variables
   if [[ -z "${SSO_START_URL:-}" ]] || [[ -z "${SSO_REGION:-}" ]] || \
-     [[ -z "${SSO_REGISTRATION_SCOPES:-}" ]] || [[ -z "${CROSS_ACCOUNT_PROFILE:-}" ]]; then
+     [[ -z "${SSO_REGISTRATION_SCOPES:-}" ]] || [[ -z "${CROSS_ACCOUNT_PROFILE:-}" ]] || \
+     [[ -z "${OUTPUT_FORMAT:-}" ]]; then
     printMsg "error" "Config file is missing required variables" "😕"
     printMsg "warning" "Please ensure all required variables are set in: $config_file"
-    exit 1
+    printMsg "info" "Would you like to update the configuration file?"
+    read -rp "${mg}Update config file? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " update_config_prompt
+    update_config_prompt=${update_config_prompt:-Y}
+    
+    if [[ "$update_config_prompt" =~ ^[Yy]$ ]]; then
+      create_config "$config_file"
+    else
+      printMsg "error" "Configuration file is required to run awsctx. Exiting..." "😢"
+      exit 1
+    fi
   fi
 
-  # Validate AWS region
-  if ! aws ec2 describe-regions --region "$SSO_REGION" >/dev/null 2>&1; then
-    printMsg "error" "Invalid AWS region in config file: $SSO_REGION"
+  # Basic format check for region (just to catch obvious typos)
+  if [[ ! "$SSO_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]{1}$ ]]; then
+    printMsg "error" "Invalid AWS region format in config file: $SSO_REGION" "⚠️"
+    printMsg "info" "Region should be in the format: us-east-1, eu-west-2, etc."
     exit 1
   fi
 }
@@ -192,10 +196,24 @@ create_config() {
     printMsg "code" "Format: d-xxxxxxxx"
     printMsg "highlight" "Example: d-a1b2c3d4e5"
     printMsg "help" "You can find this in your AWS SSO console under 'Directory ID'"
-    read -rp "${mg}Enter Directory ID: ${bl}" SSO_START_URL
+    if [[ -n "${SSO_START_URL:-}" ]]; then
+      # Extract just the directory ID from the full URL if needed
+      local default_id
+      if [[ "$SSO_START_URL" =~ ^https:// ]]; then
+        default_id=$(echo "$SSO_START_URL" | sed -E 's|https://([^.]+)\.awsapps\.com/start|\1|')
+      else
+        default_id="$SSO_START_URL"
+      fi
+      read -rp "${mg}Enter Directory ID [${bl}${default_id}${mg}]: ${bl}" input
+      SSO_START_URL=${input:-$default_id}
+    else
+      read -rp "${mg}Enter Directory ID: ${bl}" SSO_START_URL
+    fi
     echo
 
     if [[ "$SSO_START_URL" =~ ^[a-zA-Z0-9-]+$ ]]; then
+      # Construct the full SSO start URL
+      SSO_START_URL="https://${SSO_START_URL}.awsapps.com/start"
       break
     else
       printMsg "error" "Invalid format. Please enter only alphanumeric characters and hyphens"
@@ -207,13 +225,18 @@ create_config() {
     printMsg "code" "AWS Region"
     printMsg "info" "This is the AWS region where your SSO is configured"
     printMsg "highlight" "Example: us-east-1"
-    read -rp "${mg}Enter AWS Region: ${bl}" SSO_REGION
+    if [[ -n "${SSO_REGION:-}" ]]; then
+      read -rp "${mg}Enter AWS Region [${bl}${SSO_REGION}${mg}]: ${bl}" input
+      SSO_REGION=${input:-$SSO_REGION}
+    else
+      read -rp "${mg}Enter AWS Region: ${bl}" SSO_REGION
+    fi
     echo
 
-    if aws ec2 describe-regions --region "$SSO_REGION" >/dev/null 2>&1; then
+    if [[ "$SSO_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]{1}$ ]]; then
       break
     else
-      printMsg "error" "Invalid AWS region. Please enter a valid region (e.g., us-east-1)"
+      printMsg "error" "Invalid region format. Please enter a region in the format: us-east-1, eu-west-2, etc."
     fi
   done
 
@@ -221,15 +244,95 @@ create_config() {
   printMsg "code" "SSO Registration Scopes"
   printMsg "info" "This is the SSO permission scope for your AWS account"
   printMsg "highlight" "Example: sso:account:access"
-  read -rp "${mg}Enter SSO Registration Scopes: ${bl}" SSO_REGISTRATION_SCOPES
+  if [[ -n "${SSO_REGISTRATION_SCOPES:-}" ]]; then
+    read -rp "${mg}Enter SSO Registration Scopes [${bl}${SSO_REGISTRATION_SCOPES}${mg}]: ${bl}" input
+    SSO_REGISTRATION_SCOPES=${input:-$SSO_REGISTRATION_SCOPES}
+  else
+    read -rp "${mg}Enter SSO Registration Scopes: ${bl}" SSO_REGISTRATION_SCOPES
+  fi
   echo
 
   # Prompt for CROSS_ACCOUNT_PROFILE
   printMsg "code" "Cross Account Profile"
   printMsg "info" "This is the name of the AWS profile that will be used to assume roles in other accounts"
   printMsg "highlight" "Example: cross-account-access"
-  read -rp "${mg}Enter Cross Account Profile name: ${bl}" CROSS_ACCOUNT_PROFILE
+  if [[ -n "${CROSS_ACCOUNT_PROFILE:-}" ]]; then
+    read -rp "${mg}Enter Cross Account Profile name [${bl}${CROSS_ACCOUNT_PROFILE}${mg}]: ${bl}" input
+    CROSS_ACCOUNT_PROFILE=${input:-$CROSS_ACCOUNT_PROFILE}
+  else
+    read -rp "${mg}Enter Cross Account Profile name: ${bl}" CROSS_ACCOUNT_PROFILE
+  fi
   echo
+
+  # Prompt for OUTPUT_FORMAT
+  printMsg "code" "AWS CLI Output Format"
+  printMsg "info" "This is the default output format for AWS CLI commands"
+  printMsg "highlight" "Example: json, text, table, yaml, yaml-stream"
+  
+  # Define options for output format selection
+  local output_options=(
+    "json"
+    "text"
+    "table"
+    "yaml"
+    "yaml-stream"
+  )
+  
+  # Use fzf to get user's choice
+  local selected_format
+  selected_format=$(printf "%s\n" "${output_options[@]}" | fzf --height=10 --layout=reverse --header="Select output format")
+  
+  if [[ -n "$selected_format" ]]; then
+    OUTPUT_FORMAT="$selected_format"
+  else
+    printMsg "error" "No output format selected. Using default: json" "⚠️"
+    OUTPUT_FORMAT="json"
+  fi
+  printMsg "success" "Output format selected: $OUTPUT_FORMAT" "✅"
+
+  # Ask about CLI pager preference
+  read -rp "${mg}Would you like to set a CLI pager for AWS output? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " USE_PAGER
+  USE_PAGER=${USE_PAGER:-Y}
+  if [[ "$USE_PAGER" =~ ^[Yy]$ ]]; then
+    printMsg "info" "Common pager options:"
+    # Define options for pager selection
+    local pager_options=(
+      "bat -Ppl yaml (Syntax highlighted output - requires bat)"
+      "less (Standard pager)"
+      "more (Simple pager)"
+      "custom (Enter your own pager command)"
+    )
+    
+    # Use fzf to get user's choice
+    local selected_pager
+    selected_pager=$(printf "%s\n" "${pager_options[@]}" | fzf --height=10 --layout=reverse --header="Select pager")
+    
+    case "$selected_pager" in
+      "bat -Ppl yaml (Syntax highlighted output - requires bat)")
+        # Check if bat is installed
+        if ! command -v bat &> /dev/null; then
+          printMsg "error" "bat is not installed. Please install bat to use this option." "⚠️"
+          printMsg "info" "https://github.com/sharkdp/bat#installation"
+          CLI_PAGER=""
+        else
+          CLI_PAGER="bat -Ppl yaml"
+        fi
+        ;;
+      "less (Standard pager)")
+        CLI_PAGER="less"
+        ;;
+      "more (Simple pager)")
+        CLI_PAGER="more"
+        ;;
+      "custom (Enter your own pager command)")
+        read -r -p "Enter your custom pager command: " CLI_PAGER
+        ;;
+      *)
+        printMsg "warning" "Invalid selection. No pager will be set." "⚠️"
+        CLI_PAGER=""
+        ;;
+    esac
+  fi
 
   # Write config file
   cat > "$config_file" << EOF
@@ -241,6 +344,8 @@ SSO_START_URL="$SSO_START_URL"
 SSO_REGION="$SSO_REGION"
 SSO_REGISTRATION_SCOPES="$SSO_REGISTRATION_SCOPES"
 CROSS_ACCOUNT_PROFILE="$CROSS_ACCOUNT_PROFILE"
+OUTPUT_FORMAT="$OUTPUT_FORMAT"
+CLI_PAGER="$CLI_PAGER"
 EOF
 
   printMsg "success" "Configuration file created successfully at: $config_file" "✅"
@@ -395,6 +500,80 @@ run_aws_sso_login() {
   fi
 }
 
+validate_output() {
+  trap 'exit 2' SIGINT
+  if [[ -z "$OUTPUT_FORMAT" ]]; then
+    printMsg "error" "No output format provided with the ${it}-o${nc}${rd} flag 🪧${nc}"
+    
+    # Define options for output format selection
+    local output_options=(
+      "json"
+      "text"
+      "table"
+      "yaml"
+      "yaml-stream"
+    )
+    
+    # Use fzf to get user's choice
+    local selected_format
+    selected_format=$(printf "%s\n" "${output_options[@]}" | fzf --height=10 --layout=reverse --header="Select output format")
+    
+    if [[ -n "$selected_format" ]]; then
+      OUTPUT_FORMAT="$selected_format"
+    else
+      printMsg "error" "No output format selected. Using default: json" "⚠️"
+      OUTPUT_FORMAT="json"
+    fi
+  fi
+  printMsg "success" "Output format selected: $OUTPUT_FORMAT" "✅"
+
+  # Ask about CLI pager preference only if not already set
+  if [[ -z "${CLI_PAGER:-}" ]]; then
+    read -rp "${mg}Would you like to set a CLI pager for AWS output? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " USE_PAGER
+    USE_PAGER=${USE_PAGER:-Y}
+    if [[ "$USE_PAGER" =~ ^[Yy]$ ]]; then
+      printMsg "info" "Common pager options:"
+      # Define options for pager selection
+      local pager_options=(
+        "bat -Ppl yaml (Syntax highlighted output - requires bat)"
+        "less (Standard pager)"
+        "more (Simple pager)"
+        "custom (Enter your own pager command)"
+      )
+      
+      # Use fzf to get user's choice
+      local selected_pager
+      selected_pager=$(printf "%s\n" "${pager_options[@]}" | fzf --height=10 --layout=reverse --header="Select pager")
+      
+      case "$selected_pager" in
+        "bat -Ppl yaml (Syntax highlighted output - requires bat)")
+          # Check if bat is installed
+          if ! command -v bat &> /dev/null; then
+            printMsg "error" "bat is not installed. Please install bat to use this option." "⚠️"
+            printMsg "info" "https://github.com/sharkdp/bat#installation"
+            CLI_PAGER=""
+          else
+            CLI_PAGER="bat -Ppl yaml"
+          fi
+          ;;
+        "less (Standard pager)")
+          CLI_PAGER="less"
+          ;;
+        "more (Simple pager)")
+          CLI_PAGER="more"
+          ;;
+        "custom (Enter your own pager command)")
+          read -r -p "Enter your custom pager command: " CLI_PAGER
+          ;;
+        *)
+          printMsg "warning" "Invalid selection. No pager will be set." "⚠️"
+          CLI_PAGER=""
+          ;;
+      esac
+    fi
+  fi
+}
+
 setup_aws_config() {
   trap 'exit 2' SIGINT
   unset AWS_PROFILE
@@ -410,8 +589,19 @@ setup_aws_config() {
   fi
   echo "$SESSION_BLOCK" > "${AWS_CONFIG_FILE}"
   if run_aws_sso_login; then
-    read -rp "${bl}Setup will now continue to generate your config. Press enter to continue ↩️ ${nc}"
-    GENERATE_CONFIG="true"
+    printMsg "success" "AWS SSO configuration initialized successfully" "✅"
+    read -rp "${bl}Would you like to generate AWS profiles now? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " generate_now
+    generate_now=${generate_now:-Y}
+    if [[ "$generate_now" =~ ^[Yy]$ ]]; then
+      GENERATE_CONFIG="true"
+      if [[ -z "$OUTPUT_FORMAT" ]]; then
+        validate_output
+      fi
+      generate_config
+      exit 0  # Exit after generating config to prevent double execution
+    else
+      printMsg "info" "You can run '${bl}${bd}awsctx -g${nc}' later to generate your AWS profiles"
+    fi
   else
     printMsg "error" "Failed to initialize AWS CLI configuration" "😭"
     exit 1
@@ -481,31 +671,36 @@ generate_bar() {
 validate_token() {
   trap 'exit 2' SIGINT
   if [[ ! -s ${AWS_CONFIG_FILE} ]]; then
-    echo "${rd}AWS config file empty: ${AWS_CONFIG_FILE} 🫥${nc}"
-    echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
-    exit 1
+    printMsg "error" "AWS config file empty: ${AWS_CONFIG_FILE}" "🫥"
+    printMsg "info" "Proceeding to initialize your AWS CLI configuration..."
+    setup_aws_config
+    return
   fi
   if [[ ! -d "$SSO_CACHE_DIR" ]]; then
-    echo "${rd}SSO cache directory not found: $SSO_CACHE_DIR 😰${nc}"
-    echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
-    exit 1
+    printMsg "error" "SSO cache directory not found: $SSO_CACHE_DIR" "😰"
+    printMsg "info" "Proceeding to initialize your AWS CLI configuration..."
+    setup_aws_config
+    return
   fi
   LATEST_SSO_CACHE="$(find "${SSO_CACHE_DIR}" -type f -print0 | xargs -0 ls -t | head -n1)"
   ACCESS_TOKEN_FILE="${LATEST_SSO_CACHE}"
+  ACCESS_TOKEN=""  # Initialize ACCESS_TOKEN
   if [[ ! -f "$ACCESS_TOKEN_FILE" ]]; then
-    echo "${rd}SSO access token could not be found 😦${nc}"
-    echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
-    exit 1
+    printMsg "error" "SSO access token could not be found" "😦"
+    printMsg "info" "Proceeding to initialize your AWS CLI configuration..."
+    setup_aws_config
+    return
   else
-    ACCESS_TOKEN=$(jq -e -r '.accessToken' "$ACCESS_TOKEN_FILE")
+    ACCESS_TOKEN=$(jq -e -r '.accessToken' "$ACCESS_TOKEN_FILE" || echo "")
     if [[ -z "$ACCESS_TOKEN" ]]; then
       if [[ ! -f "${AWS_CONFIG_FILE}" ]]; then
-        echo "${rd}AWS config file not found: $AWS_CONFIG_FILE 🫥${nc}"
-        echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
-        exit 1
+        printMsg "error" "AWS config file not found: $AWS_CONFIG_FILE" "🫥"
+        printMsg "info" "Proceeding to initialize your AWS CLI configuration..."
+        setup_aws_config
+        return
       else
-        echo "${rd}SSO access token not found in cache directory: $SSO_CACHE_DIR 😶‍🌫️${nc}"
-        echo "Please run '${bl}${bd}aws sso login --sso-session awsctx${nc}' to login to AWS SSO"
+        printMsg "error" "SSO access token not found in cache directory: $SSO_CACHE_DIR" "😶‍🌫️"
+        printMsg "info" "Please run '${bl}${bd}aws sso login --sso-session awsctx${nc}' to login to AWS SSO"
         read -rp "${mg}Attempt to login to AWS SSO? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " attempt
         attempt=${attempt:-Y}
         if [[ "$attempt" =~ ^[Yy]$ ]]; then
@@ -517,8 +712,8 @@ validate_token() {
     fi
     EXPIRES_AT=$(jq -e -r '.expiresAt' "$ACCESS_TOKEN_FILE")
     if [[ "$CURRENT_TIME" > "$EXPIRES_AT" ]]; then
-      echo "${rd}SSO access token has expired 👴🏼${nc}"
-      echo "Please run '${bl}${bd}aws sso login --sso-session awsctx${nc}' to login to AWS SSO"
+      printMsg "error" "SSO access token has expired" "👴🏼"
+      printMsg "info" "Please run '${bl}${bd}aws sso login --sso-session awsctx${nc}' to login to AWS SSO"
       read -rp "${mg}Attempt to login to AWS SSO? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " attempt
       attempt=${attempt:-Y}
       if [[ "$attempt" =~ ^[Yy]$ ]]; then
@@ -531,6 +726,10 @@ validate_token() {
 }
 
 build_accounts_list() {
+  # Ensure we have a valid token before proceeding
+  validate_token
+  
+  # Now we can safely use ACCESS_TOKEN as it will be set by validate_token
   aws \
     sso \
     list-accounts \
@@ -557,6 +756,10 @@ accounts_load() {
 
 build_roles_list() {
   trap 'exit 2' SIGINT
+  
+  # Ensure we have a valid token before proceeding
+  validate_token
+  
   echo "[]" >"$ACCOUNTS_ROLES"
   jq -e -c '.[]' "$ACCOUNTS_LIST" | while read -r account; do
     ACCOUNT_ID=$(echo "$account" | jq -e -r '.accountId')
@@ -587,41 +790,54 @@ roles_load() {
 }
 
 write_config() {
-  # Write session block to temporary file
-  echo "$SESSION_BLOCK" > "${AWS_CONFIG_PROFILES}"
-  
-  # Write account profiles to temporary file
-  jq -r '
-    # Group by accountName to detect duplicates
-    group_by(.accountName) |
-    .[] |
-    # For each group, if there is more than one entry, append role name to accountName
-    if (length > 1) then
-      .[] | . + {
-        displayName: "\(.accountName)-\(.sso_role_name)"
-      }
-    else
-      .[] | . + {
-        displayName: .accountName
-      }
-    end |
-    # Output the profile configuration
-    "[profile \(.displayName)]\n" +
-    "sso_session = awsctx\n" +
-    "sso_account_id = \(.accountId | gsub("\"";""))\n" +
-    "sso_role_name = \(.sso_role_name | gsub("\"";""))\n" +
-    "region = \(if (.accountName | test("^(?i)uk-?")) then "eu-west-1" else "us-east-1" end)\n" +
-    "output = '"$OUTPUT_FORMAT"'\n" +
-    if ("'"$CLI_PAGER"'" != "") then "cli_pager = '"$CLI_PAGER"'\n" else "" end
-  ' "$ACCOUNTS_ROLES" >> "${AWS_CONFIG_PROFILES}"
-  
-  # Write default profile
-  echo "[default]" >> "${AWS_CONFIG_PROFILES}"
+  # Create a temporary file for the default profile section
+  local default_section
+  default_section=$(create_temp_file "default_section")
+
+  # Extract the default profile section to a temporary file first
   awk -v common_profile="profile $CROSS_ACCOUNT_PROFILE" '
     $0 ~ common_profile {in_default = 1; next}
     /^\[/ && in_default {in_default = 0}
     in_default && NF {print}
-  ' "${AWS_CONFIG_PROFILES}" | tail -n +1 >> "${AWS_CONFIG_PROFILES}"
+  ' "${AWS_CONFIG_PROFILES}" > "$default_section"
+
+  # Write all config sections to AWS_CONFIG_PROFILES in a single operation
+  {
+    # Write session block
+    echo "$SESSION_BLOCK"
+    
+    # Write account profiles
+    jq -r '
+      # Group by accountName to detect duplicates
+      group_by(.accountName) |
+      .[] |
+      # For each group, if there is more than one entry, append role name to accountName
+      if (length > 1) then
+        .[] | . + {
+          displayName: "\(.accountName)-\(.sso_role_name)"
+        }
+      else
+        .[] | . + {
+          displayName: .accountName
+        }
+      end |
+      # Output the profile configuration
+      "[profile \(.displayName)]\n" +
+      "sso_session = awsctx\n" +
+      "sso_account_id = \(.accountId | gsub("\"";""))\n" +
+      "sso_role_name = \(.sso_role_name | gsub("\"";""))\n" +
+      "region = \(if (.accountName | test("^(?i)uk-?")) then "eu-west-1" else "us-east-1" end)\n" +
+      "output = '"$OUTPUT_FORMAT"'\n" +
+      if ("'"$CLI_PAGER"'" != "") then "cli_pager = '"$CLI_PAGER"'\n" else "" end
+    ' "$ACCOUNTS_ROLES"
+    
+    # Write default profile section
+    echo "[default]"
+    cat "$default_section"
+  } > "${AWS_CONFIG_PROFILES}"
+
+  # Clean up temporary file
+  rm -f "$default_section"
 
   # Copy temporary file to final config file
   cp "${AWS_CONFIG_PROFILES}" "${AWS_CONFIG_FILE}"
@@ -719,7 +935,12 @@ EOF
 while getopts "b:ghikvo:r" opt; do
   case $opt in
   b) BROWSER_OVERRIDE="$OPTARG" ;;
-  g) GENERATE_CONFIG="true" ;;
+  g) 
+    GENERATE_CONFIG="true"
+    if [[ -z "$OUTPUT_FORMAT" ]]; then
+      validate_output
+    fi
+    ;;
   h)
     usage
     exit 0
@@ -758,83 +979,6 @@ while getopts "b:ghikvo:r" opt; do
     ;;
   esac
 done
-
-validate_output() {
-  trap 'exit 2' SIGINT
-  if [[ -z "$OUTPUT_FORMAT" ]]; then
-    echo "${rd}No output format provided with the ${it}-o${nc}${rd} flag 🪧${nc}"
-    while true; do
-      echo "${wh}Please choose your preferred AWS CLI response output format:${nc}"
-      echo "${yl}1) json${nc}"
-      echo "${yl}2) text${nc}"
-      echo "${yl}3) table${nc}"
-      echo "${yl}4) yaml${nc}"
-      echo "${yl}5) yaml-stream${nc}"
-      read -r -p "Enter selection [1-5]: " selection
-      case $selection in
-      1)
-        OUTPUT_FORMAT="json"
-        break
-        ;;
-      2)
-        OUTPUT_FORMAT="text"
-        break
-        ;;
-      3)
-        OUTPUT_FORMAT="table"
-        break
-        ;;
-      4)
-        OUTPUT_FORMAT="yaml"
-        break
-        ;;
-      5)
-        OUTPUT_FORMAT="yaml-stream"
-        break
-        ;;
-      *) echo "${rd}Invalid selection. Please enter a number between 1 and 5 🧑🏾‍🏫${nc}" ;;
-      esac
-    done
-  fi
-  echo "${gr}Output format selected: $OUTPUT_FORMAT${nc}"
-
-  # Ask about CLI pager preference
-  read -rp "${mg}Would you like to set a CLI pager for AWS output? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " USE_PAGER
-  USE_PAGER=${USE_PAGER:-Y}
-  if [[ "$USE_PAGER" =~ ^[Yy]$ ]]; then
-    echo "${wh}Common pager options:${nc}"
-    echo "${yl}1) bat -Ppl yaml${nc}    ${cy}(Syntax highlighted output - requires bat)${nc}"
-    echo "${yl}2) less${nc}             ${cy}(Standard pager)${nc}"
-    echo "${yl}3) more${nc}             ${cy}(Simple pager)${nc}"
-    echo "${yl}4) custom${nc}           ${cy}(Enter your own pager command)${nc}"
-    read -r -p "Enter selection [1-4]: " pager_selection
-    case $pager_selection in
-    1)
-      # Check if bat is installed. Inform user where to get it if not.
-      if ! command -v bat &> /dev/null; then
-        echo "${rd}bat is not installed. Please install bat to use this option.${nc}"
-        echo "${wh}https://github.com/sharkdp/bat#installation${nc}"
-        CLI_PAGER=""
-      else
-        CLI_PAGER="bat -Ppl yaml"
-      fi
-      ;;
-    2)
-      CLI_PAGER="less"
-      ;;
-    3)
-      CLI_PAGER="more"
-      ;;
-    4)
-      read -r -p "Enter your custom pager command: " CLI_PAGER
-      ;;
-    *)
-      echo "${rd}Invalid selection. No pager will be set.${nc}"
-      CLI_PAGER=""
-      ;;
-    esac
-  fi
-}
 
 validate_token
 
