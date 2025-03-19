@@ -1,0 +1,632 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# This script generates AWS profiles for all accounts and roles associated with an AWS SSO profile.
+# It also lets you switch between AWS accounts and roles using the 'awsctx' command with no arguments.
+# This probably works best if you just remove your existing AWS config file and start fresh with 'awsctx -i'.
+
+######## EDIT HERE
+SSO_START_URL="REPLACEME" # the URL to your AWS SSO login page
+SSO_REGION="REPLACEME"                                 # the AWS region where your SSO is configured
+SSO_REGISTRATION_SCOPES="REPLACEME"           # the SSO permission scope for your AWS account. i.e. 'sso:account:access'
+CROSS_ACCOUNT_PROFILE="REPLACEME"           # the name of the AWS profile that will be used to assume roles in other accounts.
+######## STOP EDIT
+
+if [[ "$SSO_START_URL" =~ "REPLACEME" ]] || [[ "$SSO_REGION" =~ "REPLACEME" ]] || [[ "$SSO_REGISTRATION_SCOPES" =~ "REPLACEME" ]] || [[ "$CROSS_ACCOUNT_PROFILE" =~ "REPLACEME" ]]; then
+  echo "${yl}Please update the SSO_START_URL, SSO_REGION, SSO_REGISTRATION_SCOPES, and CROSS_ACCOUNT_PROFILE variables in the script 🛠️${nc}"
+  echo "${yl}These variables are used to generate the AWS config profiles for your accounts and roles.${nc}"
+  echo "${yl}You can get these values from whoever manages your AWS IAM.${nc}"
+  exit 1
+fi
+
+rd=$(tput setaf 1) # Red
+gr=$(tput setaf 2) # Green
+yl=$(tput setaf 3) # Yellow
+bl=$(tput setaf 4) # Blue
+mg=$(tput setaf 5) # Magenta
+cy=$(tput setaf 6) # Cyan
+wh=$(tput setaf 7) # White
+it=$(tput sitm)    # Italic
+bd=$(tput bold)    # Bold
+# su=$(tput smul)    # Start Underline
+# eu=$(tput rmul)    # End Underline
+# ss=$(tput smso)    # Start Standout
+# es=$(tput rmso)    # End Standout
+nc=$(tput sgr0)    # No Color / Reset
+
+check_command() {
+  local cmd=$1
+  local url=$2
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "${rd}The '$cmd' command could not be found 🤷‍♂️${nc}"
+    echo "Please install '$cmd' from $url"
+    exit 1
+  fi
+}
+
+check_aws_cli_v2() {
+  if ! command -v aws &>/dev/null; then
+    echo "${rd}The 'aws' command could not be found 🤷‍♂️${nc}"
+    echo "Please install AWS CLI v2 from https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html"
+    exit 1
+  fi
+  local version
+  version=$(aws --version 2>&1)
+  if [[ $version != aws-cli/2* ]]; then
+    echo "${rd}AWS CLI v2 is required 🏚️${nc}"
+    echo "Please install it from https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html"
+    exit 1
+  fi
+}
+
+check_command "jq" "https://github.com/jqlang/jq"
+check_command "fzf" "https://github.com/junegunn/fzf"
+check_aws_cli_v2
+
+AWS_CONFIG_HOME="${HOME}/.aws"
+AWS_CONFIG_FILE="${AWS_CONFIG_HOME}/config"
+SSO_CACHE_DIR="${AWS_CONFIG_HOME}/sso/cache"
+KUBE_HOME="${HOME}/.kube"
+CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+CONTEXT_READY="false"
+GENERATE_CONFIG="false"
+OUTPUT_FORMAT=""
+BROWSER_OVERRIDE=""
+CLI_PAGER=""
+
+[[ ! -d "${AWS_CONFIG_HOME}" ]] && mkdir -p "${AWS_CONFIG_HOME}"
+[[ ! -e "${AWS_CONFIG_FILE}" ]] && touch "${AWS_CONFIG_FILE}"
+
+AWS_CONFIG_PROFILES=$(mktemp "${AWS_CONFIG_HOME}/AWS_CONFIG_PROFILES.XXXXXX")
+ACCOUNTS_LIST=$(mktemp "${AWS_CONFIG_HOME}/ACCOUNTS_LIST.XXXXXX")
+ACCOUNTS_ROLES=$(mktemp "${AWS_CONFIG_HOME}/ACCOUNTS_ROLES.XXXXXX")
+CTX_CONFIG=$(mktemp "${AWS_CONFIG_HOME}/CTX_CONFIG.XXXXXX")
+TMP_ROLES=$(mktemp "${AWS_CONFIG_HOME}/TMP_ROLES.XXXXXX")
+WRITE_TMP=$(mktemp "${AWS_CONFIG_HOME}/WRITE_TMP.XXXXXX")
+SPINTMP=$(mktemp "${AWS_CONFIG_HOME}/SPINTMP.XXXXXX")
+SESSION_BLOCK=$(cat <<-EOF
+[sso-session awsctx]
+sso_start_url = $SSO_START_URL
+sso_region = $SSO_REGION
+sso_registration_scopes = $SSO_REGISTRATION_SCOPES
+EOF
+)
+
+cleanup_temp_files() {
+  # Only attempt to remove files if their variables are set and the files exist
+  [[ -n "$ACCOUNTS_LIST" && -f "$ACCOUNTS_LIST" ]] && rm -f "$ACCOUNTS_LIST"
+  [[ -n "$ACCOUNTS_ROLES" && -f "$ACCOUNTS_ROLES" ]] && rm -f "$ACCOUNTS_ROLES"
+  [[ -n "$CTX_CONFIG" && -f "$CTX_CONFIG" ]] && rm -f "$CTX_CONFIG"
+  [[ -n "$TMP_ROLES" && -f "$TMP_ROLES" ]] && rm -f "$TMP_ROLES"
+  [[ -n "$WRITE_TMP" && -f "$WRITE_TMP" ]] && rm -f "$WRITE_TMP"
+  [[ -n "$AWS_CONFIG_PROFILES" && -f "$AWS_CONFIG_PROFILES" ]] && rm -f "$AWS_CONFIG_PROFILES"
+  [[ -n "$SPINTMP" && -f "$SPINTMP" ]] && rm -f "$SPINTMP"
+}
+
+shutdown() {
+  tput cnorm
+  cleanup_temp_files
+}
+
+trap shutdown INT EXIT TERM ERR
+
+_cursorBack() {
+  echo -en "\033[$1D"
+}
+
+_spinner() {
+  local xtrace
+  xtrace=$(set -o | grep xtrace | awk '{print $2}')
+  set +x
+  local LC_CTYPE=C
+  local LC_ALL=en_US.utf-8
+  tput civis
+  local CL="\e[2K"
+  local spin='⢿⣿⣻⣿⣽⣿⣾⣿⣷⣿⣿⣾⣿⣷⣿⣯⣿⣟⣿⡿⣿⢿⡿⣿'
+  local pid
+  pid=$(jobs -p)
+  local charwidth=2
+  local i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    local i=$(((i + charwidth) % ${#spin}))
+    printf "%s" "${gr}${spin:i:charwidth}${nc}"
+    _cursorBack 2
+    sleep .1
+  done
+  echo -ne "$CL"
+  tput cnorm
+  wait "$pid"
+  if [[ "$xtrace" == "on" ]]; then
+    set -x
+  fi
+}
+
+use_spinner() {
+  local cmd=$1
+  shift
+  "$cmd" "$@" >"$SPINTMP" &
+  [[ $DEBUG == "true" ]] && set +x
+  _spinner
+  [[ $DEBUG == "true" ]] && set -x
+  echo -ne "\r"
+  cat "$SPINTMP"
+}
+
+run_aws_sso_login() {
+  if [[ -n "$BROWSER_OVERRIDE" && "$BROWSER_OVERRIDE" != "none" ]]; then
+    BROWSER="$BROWSER_OVERRIDE" aws sso login --sso-session awsctx
+  elif [[ "$BROWSER_OVERRIDE" == "none" ]]; then
+    aws sso login --sso-session awsctx --no-browser
+  else
+    aws sso login --sso-session awsctx
+  fi
+}
+
+setup_aws_config() {
+  trap 'exit 2' SIGINT
+  unset AWS_PROFILE
+  if [[ -e "${AWS_CONFIG_FILE}" && -s "${AWS_CONFIG_FILE}" ]]; then
+    echo "${yl}This will overwrite your existing AWS config file: ${AWS_CONFIG_FILE} ⚠️${nc}"
+    read -rp "${mg}Would you like to backup your existing AWS config file? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " BACKUP
+    BACKUP=${BACKUP:-Y}
+    if [[ "$BACKUP" =~ ^[Yy]$ ]]; then
+      echo "Backing up existing AWS config file: ${AWS_CONFIG_FILE} 💾"
+      mv "${AWS_CONFIG_FILE}" "${AWS_CONFIG_FILE}.$(date "+%d%b%Y_%H-%M-%S")"
+      touch "${AWS_CONFIG_FILE}"
+    fi
+  fi
+  echo "$SESSION_BLOCK" > "${AWS_CONFIG_FILE}"
+  if run_aws_sso_login; then
+    read -rp "${bl}Setup will now continue to generate your config. Press enter to continue ↩️ ${nc}"
+    GENERATE_CONFIG="true"
+  else
+    echo "${rd}Failed to initialize AWS CLI configuration 😭${nc}"
+    exit 1
+  fi
+}
+
+count_resources() {
+  local region=$1
+  local count=0
+  ec2_count=$(aws ec2 describe-instances --region "$region" --query "Reservations[*].Instances[*].[InstanceId]" --output text | wc -l)
+  s3_count=0
+  if [[ "$region" == "us-east-1" ]]; then
+    s3_count=$(aws s3api list-buckets --query "Buckets[*].Name" --output text | wc -l)
+  fi
+  lambda_count=$(aws lambda list-functions --region "$region" --query "Functions[*].FunctionName" --output text | wc -l)
+  rds_instance_count=$(aws rds describe-db-instances --region "$region" --query "DBInstances[*].DBInstanceIdentifier" --output text | wc -l)
+  rds_cluster_count=$(aws rds describe-db-clusters --region "$region" --query "DBClusters[*].DBClusterIdentifier" --output text | wc -l)
+  count=$((ec2_count + s3_count + lambda_count + rds_instance_count + rds_cluster_count))
+  echo "$region=$count" >>/tmp/aws_region_counts.txt
+}
+
+calculate_region_counts() {
+  trap 'exit 2' SIGINT
+  rm -f /tmp/aws_region_counts.txt
+  IFS=$'\t' read -r -a region_array <<<"$regions"
+  for region in "${region_array[@]}"; do
+    count_resources "$region" &
+  done
+  wait
+  while IFS='=' read -r region count; do
+    region_counts["$region"]=$count
+  done </tmp/aws_region_counts.txt
+  max_count=0
+  primary_region=""
+  for region in "${!region_counts[@]}"; do
+    if ((region_counts[$region] > max_count)); then
+      max_count=${region_counts[$region]}
+      primary_region=$region
+    fi
+  done
+}
+
+generate_bar() {
+  local count=$1
+  local max_count=$2
+  local length=70
+  local bar_length=$((count * length / max_count))
+  local bar=""
+  local part_length=$((length / 2))
+  for ((i = 0; i < bar_length; i++)); do
+    if ((i < part_length)); then
+      local ratio=$((i * 100 / part_length))
+      local red=$((255 * ratio / 100))
+      local green=255
+      local blue=0
+    else
+      local ratio=$(((i - part_length) * 100 / part_length))
+      local red=255
+      local green=$((255 * (100 - ratio) / 100))
+      local blue=0
+    fi
+    bar="${bar}\e[48;2;${red};${green};${blue}m \e[0m"
+  done
+  echo -e "$bar"
+}
+
+validate_token() {
+  trap 'exit 2' SIGINT
+  if [[ ! -s ${AWS_CONFIG_FILE} ]]; then
+    echo "${rd}AWS config file empty: ${AWS_CONFIG_FILE} 🫥${nc}"
+    echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
+    exit 1
+  fi
+  if [[ ! -d "$SSO_CACHE_DIR" ]]; then
+    echo "${rd}SSO cache directory not found: $SSO_CACHE_DIR 😰${nc}"
+    echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
+    exit 1
+  fi
+  LATEST_SSO_CACHE="$(find "${SSO_CACHE_DIR}" -type f -print0 | xargs -0 ls -t | head -n1)"
+  ACCESS_TOKEN_FILE="${LATEST_SSO_CACHE}"
+  if [[ ! -f "$ACCESS_TOKEN_FILE" ]]; then
+    echo "${rd}SSO access token could not be found 😦${nc}"
+    echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
+    exit 1
+  else
+    ACCESS_TOKEN=$(jq -e -r '.accessToken' "$ACCESS_TOKEN_FILE")
+    if [[ -z "$ACCESS_TOKEN" ]]; then
+      if [[ ! -f "${AWS_CONFIG_FILE}" ]]; then
+        echo "${rd}AWS config file not found: $AWS_CONFIG_FILE 🫥${nc}"
+        echo "Please run '${bl}${bd}awsctx -i${nc}' to initialize your AWS CLI configuration"
+        exit 1
+      else
+        echo "${rd}SSO access token not found in cache directory: $SSO_CACHE_DIR 😶‍🌫️${nc}"
+        echo "Please run '${bl}${bd}aws sso login --sso-session awsctx${nc}' to login to AWS SSO"
+        read -rp "${mg}Attempt to login to AWS SSO? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " attempt
+        attempt=${attempt:-Y}
+        if [[ "$attempt" =~ ^[Yy]$ ]]; then
+          run_aws_sso_login
+        else
+          exit 1
+        fi
+      fi
+    fi
+    EXPIRES_AT=$(jq -e -r '.expiresAt' "$ACCESS_TOKEN_FILE")
+    if [[ "$CURRENT_TIME" > "$EXPIRES_AT" ]]; then
+      echo "${rd}SSO access token has expired 👴🏼${nc}"
+      echo "Please run '${bl}${bd}aws sso login --sso-session awsctx${nc}' to login to AWS SSO"
+      read -rp "${mg}Attempt to login to AWS SSO? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " attempt
+      attempt=${attempt:-Y}
+      if [[ "$attempt" =~ ^[Yy]$ ]]; then
+        run_aws_sso_login
+      else
+        exit 1
+      fi
+    fi
+  fi
+}
+
+build_accounts_list() {
+  aws \
+    sso \
+    list-accounts \
+    --region us-east-1 \
+    --access-token "$ACCESS_TOKEN" \
+    --output json \
+    --query "accountList[].{accountName: accountName, accountId: accountId}" | \
+      jq 'map(
+        .accountName |= (
+          # Convert to lowercase, replace spaces and special chars with hyphens
+          gsub("[^a-zA-Z0-9-]"; "-") |
+          # Collapse multiple consecutive hyphens into a single hyphen
+          gsub("-+"; "-") |
+          # Remove leading/trailing hyphens
+          gsub("^-|-$"; "")
+        )
+      ) | sort_by(.accountName|ascii_upcase)' \
+    >"$ACCOUNTS_LIST"
+}
+
+accounts_load() {
+  use_spinner build_accounts_list
+}
+
+build_roles_list() {
+  trap 'exit 2' SIGINT
+  echo "[]" >"$ACCOUNTS_ROLES"
+  jq -e -c '.[]' "$ACCOUNTS_LIST" | while read -r account; do
+    ACCOUNT_ID=$(echo "$account" | jq -e -r '.accountId')
+    ROLES=$(
+      aws \
+        sso \
+        list-account-roles \
+        --region us-east-1 \
+        --access-token "$ACCESS_TOKEN" \
+        --account-id "$ACCOUNT_ID" \
+        --output json \
+        --query "sort_by(roleList, &roleName) | [].roleName"
+    )
+    if [[ -z "$ROLES" || "$ROLES" == "[]" ]]; then
+      echo "${rd}No roles found for account ID $ACCOUNT_ID 🙅${nc}"
+      continue
+    fi
+    for role in $(echo "$ROLES" | jq -r '.[]'); do
+      UPDATED_ACCOUNT=$(echo "$account" | jq -e --arg role "$role" '. + {sso_role_name: $role}')
+      jq -e --argjson newAccount "$UPDATED_ACCOUNT" '. += [$newAccount]' "$ACCOUNTS_ROLES" >"$TMP_ROLES"
+      mv "$TMP_ROLES" "$ACCOUNTS_ROLES"
+    done
+  done
+}
+
+roles_load() {
+  use_spinner build_roles_list
+}
+
+write_config() {
+  # Write session block to temporary file
+  echo "$SESSION_BLOCK" > "${AWS_CONFIG_PROFILES}"
+  
+  # Write account profiles to temporary file
+  jq -e -r '.[] | 
+    select(.accountName and .accountId and .sso_role_name) |
+    "[profile \(.accountName)]\n" +
+    "sso_session = awsctx\n" +
+    "sso_account_id = \(.accountId | gsub("\"";""))\n" +
+    "sso_role_name = \(.sso_role_name | gsub("\"";""))\n" +
+    "region = \(if (.accountName | test("^(?i)uk-?")) then "eu-west-1" else "us-east-1" end)\n" +
+    "output = '"$OUTPUT_FORMAT"'\n" +
+    if ("'"$CLI_PAGER"'" != "") then "cli_pager = '"$CLI_PAGER"'\n" else "" end' "$ACCOUNTS_ROLES" >> "${AWS_CONFIG_PROFILES}"
+  
+  # Write default profile
+  echo "[default]" >> "${AWS_CONFIG_PROFILES}"
+  awk -v common_profile="profile $CROSS_ACCOUNT_PROFILE" '
+    $0 ~ common_profile {in_default = 1; next}
+    /^\[/ && in_default {in_default = 0}
+    in_default && NF {print}
+  ' "${AWS_CONFIG_PROFILES}" | tail -n +1 >> "${AWS_CONFIG_PROFILES}"
+
+  # Copy temporary file to final config file
+  cp "${AWS_CONFIG_PROFILES}" "${AWS_CONFIG_FILE}"
+
+  echo "${gr}AWS profiles have been successfully generated, and written to: ${AWS_CONFIG_FILE} ✅${nc}"
+  echo "${wh}You can now use '${bl}${bd}awsctx${nc}${wh}' to switch between AWS accounts and roles 🏁${nc}"
+}
+
+generate_config() {
+  validate_output
+  echo -n "📇 Populating Accounts..."
+  accounts_load
+  echo "📇 Populating Accounts...${gr}✓${nc}"
+  echo -n "👥 Gathering roles for accounts..."
+  roles_load
+  echo "👥 Gathering roles for accounts...${gr}✓${nc}"
+  write_config
+}
+
+print_heatmap() {
+  printf "\n${bl}%-14s${nc} │ ${bl}%s${nc}\n" "Region" "Resources"
+  printf "%-14s┼%s\n" "───────────────" "───────────"
+  for region in "${!region_counts[@]}"; do
+    count=${region_counts["$region"]}
+    bar=$(generate_bar "$count" "$max_count")
+    printf "%-14s │ %s\n" "$region" "$bar"
+  done
+  echo -e "\\n${cy}The primary region with the majority of resources is: ${mg}$primary_region${nc}\\n"
+}
+
+process_profile() {
+  local profile_name="$1"
+  for region in $(aws --profile "$profile_name" ec2 describe-regions --query "Regions[].RegionName" --output text); do
+    clusters=$(aws --profile "$profile_name" eks list-clusters --region "$region" --query "clusters[]" --output text)
+    if [[ -n "$clusters" ]]; then
+      for cluster in $clusters; do
+        echo "${yl}Updating kubeconfig for cluster: $cluster in region: $region with profile: $profile_name${nc}"
+        aws --profile "$profile_name" eks update-kubeconfig --region "$region" --name "$cluster"
+      done
+    fi
+  done
+}
+
+detect_eks_clusters() {
+  [[ ! -d "${KUBE_HOME}" ]] && mkdir -p "${KUBE_HOME}"
+  export -f process_profile
+  awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //' | \
+    xargs -I {} -P 10 bash -c 'process_profile "$@"' _ "{}"
+}
+
+usage() {
+  cat <<EOF
+${bd}${mg}AWS Context Manager${nc}
+
+${cy}Description:${nc}
+  ${wh}This script helps interact with multiple AWS account profiles by generating an AWS${nc}
+  ${wh}config that includes profiles for all accounts and roles associated with an AWS SSO${nc}
+  ${wh}profile.${nc}
+  ${wh}Once the profiles are generated, you can use $(basename "$0") (with no options)${nc}
+  ${wh}to select from a list of accounts, and easily search/switch between them.${nc}
+
+${cy}Usage: ${mg}$(basename "$0") ${yl}[options]${nc}
+
+${cy}Options:${nc}
+  ${yl}-b ${bl}<browser>${nc}           Specify the browser to use for AWS SSO login.
+                         Use 'none' to disable browser and use --no-browser option.
+  ${yl}-g${nc}                     Generate AWS config profiles from AWS SSO
+  ${yl}-i${nc}                     Initialize AWS SSO configuration and login
+  ${yl}-k${nc}                     Detect EKS clusters and update kubeconfig
+  ${yl}-o ${bl}<output_format>${nc}     Specify the output format for AWS CLI commands
+                         Valid options: ${it}json${nc}, ${it}text${nc}, ${it}table${nc}, ${it}yaml${nc}, ${it}yaml-stream${nc}
+  ${yl}-r${nc}                     Generate an AWS Region Heatmap for the current profile
+  ${yl}-v${nc}                     Enable verbose mode
+  ${yl}-h, --help${nc}             Display this help message and exit
+
+${cy}Examples:${nc}
+  ${it}${gr}$(basename "$0") -i${nc}
+      Initialize AWS SSO configuration and login
+  ${it}${gr}$(basename "$0") -g${nc}
+      Generate AWS config profiles from AWS SSO
+  ${it}${gr}$(basename "$0") -k${nc}
+      Detect EKS clusters and update kubeconfig
+  ${it}${gr}$(basename "$0") -o json${nc}
+      Specify the output format as JSON for AWS CLI commands
+  ${it}${gr}$(basename "$0") -b firefox${nc}
+      Use Firefox as the browser for AWS SSO login
+  ${it}${gr}$(basename "$0") -b none${nc}
+      Use --no-browser option for AWS SSO login
+  ${it}${gr}$(basename "$0") -v${nc}
+      Enable verbose mode
+
+EOF
+}
+
+DEBUG=false
+
+while getopts "b:ghikvo:r" opt; do
+  case $opt in
+  b) BROWSER_OVERRIDE="$OPTARG" ;;
+  g) GENERATE_CONFIG="true" ;;
+  h)
+    usage
+    exit 0
+    ;;
+  i) setup_aws_config ;;
+  k)
+    echo -n "${bl}Detecting EKS clusters... (This can take a while)${nc}"
+    use_spinner detect_eks_clusters
+    echo "${bl}Detecting EKS clusters...${gr}✓${nc}"
+    exit 0
+    ;;
+  o) OUTPUT_FORMAT="$OPTARG" ;;
+  r)
+    CURRENT_PROFILE=$(grep -b2 "$(aws configure get profile.default.sso_account_id)" ~/.aws/config | grep 'profile' | cut -d' ' -f2 | cut -d']' -f1)
+    echo "${mg}Generating AWS Region Heatmap for $CURRENT_PROFILE...${nc}"
+    regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
+    declare -A region_counts
+    calculate_region_counts
+    use_spinner print_heatmap
+    exit 0
+    ;;
+  v)
+    DEBUG=true
+    set -x
+    ;;
+  \?)
+    echo "${rd}Invalid option: -$OPTARG 👮🏻‍♂️${nc}"
+    usage
+    exit 1
+    ;;
+  :)
+    echo "${rd}Option -$OPTARG requires an argument 😑${nc}"
+    usage
+    exit 1
+    ;;
+  esac
+done
+
+validate_output() {
+  trap 'exit 2' SIGINT
+  if [[ -z "$OUTPUT_FORMAT" ]]; then
+    echo "${rd}No output format provided with the ${it}-o${nc}${rd} flag 🪧${nc}"
+    while true; do
+      echo "${wh}Please choose your preferred AWS CLI response output format:${nc}"
+      echo "${yl}1) json${nc}"
+      echo "${yl}2) text${nc}"
+      echo "${yl}3) table${nc}"
+      echo "${yl}4) yaml${nc}"
+      echo "${yl}5) yaml-stream${nc}"
+      read -r -p "Enter selection [1-5]: " selection
+      case $selection in
+      1)
+        OUTPUT_FORMAT="json"
+        break
+        ;;
+      2)
+        OUTPUT_FORMAT="text"
+        break
+        ;;
+      3)
+        OUTPUT_FORMAT="table"
+        break
+        ;;
+      4)
+        OUTPUT_FORMAT="yaml"
+        break
+        ;;
+      5)
+        OUTPUT_FORMAT="yaml-stream"
+        break
+        ;;
+      *) echo "${rd}Invalid selection. Please enter a number between 1 and 5 🧑🏾‍🏫${nc}" ;;
+      esac
+    done
+  fi
+  echo "${gr}Output format selected: $OUTPUT_FORMAT${nc}"
+
+  # Ask about CLI pager preference
+  read -rp "${mg}Would you like to set a CLI pager for AWS output? ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}: " USE_PAGER
+  USE_PAGER=${USE_PAGER:-Y}
+  if [[ "$USE_PAGER" =~ ^[Yy]$ ]]; then
+    echo "${wh}Common pager options:${nc}"
+    echo "${yl}1) bat -Ppl yaml${nc}    ${cy}(Syntax highlighted output - requires bat)${nc}"
+    echo "${yl}2) less${nc}             ${cy}(Standard pager)${nc}"
+    echo "${yl}3) more${nc}             ${cy}(Simple pager)${nc}"
+    echo "${yl}4) custom${nc}           ${cy}(Enter your own pager command)${nc}"
+    read -r -p "Enter selection [1-4]: " pager_selection
+    case $pager_selection in
+    1)
+      # Check if bat is installed. Inform user where to get it if not.
+      if ! command -v bat &> /dev/null; then
+        echo "${rd}bat is not installed. Please install bat to use this option.${nc}"
+        echo "${wh}https://github.com/sharkdp/bat#installation${nc}"
+        CLI_PAGER=""
+      else
+        CLI_PAGER="bat -Ppl yaml"
+      fi
+      ;;
+    2)
+      CLI_PAGER="less"
+      ;;
+    3)
+      CLI_PAGER="more"
+      ;;
+    4)
+      read -r -p "Enter your custom pager command: " CLI_PAGER
+      ;;
+    *)
+      echo "${rd}Invalid selection. No pager will be set.${nc}"
+      CLI_PAGER=""
+      ;;
+    esac
+  fi
+}
+
+validate_token
+
+if [[ "$GENERATE_CONFIG" == "true" ]]; then
+  generate_config
+  exit 0
+fi
+
+CONTEXT_READY="true"
+
+change_context() {
+  trap 'exit 2' SIGINT
+  PROFILE_DISPLAY=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //' | while read -r profile; do
+    ACCOUNT_ID=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_account_id' | awk -F' = ' '{print $2}')
+    echo "$profile ($ACCOUNT_ID)"
+  done)
+  SELECTED_PROFILE=$(echo "$PROFILE_DISPLAY" | fzf --height=50% --header='Select an AWS account to switch to. Type to filter accounts by name or number:')
+  if [[ -z "$SELECTED_PROFILE" ]]; then
+    exit 0
+  fi
+  PROFILE_NAME=$(echo "$SELECTED_PROFILE" | awk -F' ' '{print $1}')
+  awk '
+      BEGIN {skip=0}
+      /^\[default\]/ {skip=1}
+      /^\[/ && !/^\[default\]/ {skip=0}
+      !skip {print}
+  ' "$AWS_CONFIG_FILE" >"$CTX_CONFIG"
+  echo "[default]" >>"$CTX_CONFIG"
+  # Use exact match for profile instead of substring match
+  awk -v profile="profile $PROFILE_NAME" '
+      $0 ~ "^\\[" profile "\\]$" {in_default = 1; next}
+      /^\[/ && in_default {in_default = 0}
+      in_default && NF {print}
+  ' "$AWS_CONFIG_FILE" | tail -n +1 >>"$CTX_CONFIG"
+  mv "$CTX_CONFIG" "$AWS_CONFIG_FILE"
+  echo "${gr}Switched default profile to: $PROFILE_NAME 🔀${nc}"
+}
+
+if [[ "$CONTEXT_READY" == "true" ]]; then
+  change_context
+fi
