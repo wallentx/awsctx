@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This script generates AWS profiles for all accounts and roles associated with an AWS SSO profile.
+# It also lets you switch between AWS accounts and roles using the 'awsctx' command with no arguments.
+# This probably works best if you just remove your existing AWS config file and start fresh with 'awsctx -i'.
+
 # Check for color support
 if ! tput colors >/dev/null 2>&1; then
     echo "Warning: Your terminal doesn't support colors. Some features may not display correctly."
@@ -69,28 +73,6 @@ GENERATE_CONFIG="false"
 OUTPUT_FORMAT=""
 BROWSER_OVERRIDE=""
 CLI_PAGER=""
-
-# This script generates AWS profiles for all accounts and roles associated with an AWS SSO profile.
-# It also lets you switch between AWS accounts and roles using the 'awsctx' command with no arguments.
-# This probably works best if you just remove your existing AWS config file and start fresh with 'awsctx -i'.
-
-# Colors
-rd=$(tput setaf 1)   # Red
-gr=$(tput setaf 2)   # Green
-yl=$(tput setaf 3)   # Yellow
-bl=$(tput setaf 4)   # Blue
-mg=$(tput setaf 5)   # Magenta
-cy=$(tput setaf 6)   # Cyan
-wh=$(tput setaf 7)   # White
-gy=$(tput setaf 8)   # Gray
-or=$(tput setaf 208) # Orange
-it=$(tput sitm)      # Italic
-bd=$(tput bold)      # Bold
-# su=$(tput smul)    # Start Underline
-# eu=$(tput rmul)    # End Underline
-# ss=$(tput smso)    # Start Standout
-# es=$(tput rmso)    # End Standout
-nc=$(tput sgr0)      # No Color / Reset
 
 get_config_dir() {
   # First check if ~/.config exists
