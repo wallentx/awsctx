@@ -360,7 +360,7 @@ write_config() {
   # Write account profiles to temporary file
   jq -e -r '.[] | 
     select(.accountName and .accountId and .sso_role_name) |
-    "[profile \(.accountName)]\n" +
+    "[profile \(.accountName) \(.sso_role_name | gsub("\"";""))]\n" +
     "sso_session = awsctx\n" +
     "sso_account_id = \(.accountId | gsub("\"";""))\n" +
     "sso_role_name = \(.sso_role_name | gsub("\"";""))\n" +
