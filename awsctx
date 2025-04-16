@@ -5,6 +5,9 @@ set -euo pipefail
 # It also lets you switch between AWS accounts and roles using the 'awsctx' command with no arguments.
 # This probably works best if you just remove your existing AWS config file and start fresh with 'awsctx -i'.
 
+VERSION="0.1.0"
+GITHUB_REPO="wallentx/awsctx"
+
 # Check for color support
 if ! tput colors >/dev/null 2>&1; then
     echo "Warning: Your terminal doesn't support colors. Some features may not display correctly."
@@ -958,12 +961,42 @@ print_heatmap() {
 
 process_profile() {
   local profile_name="$1"
+  local temp_config="$2"
+  
+  # Skip if this is eng_readonly and we have other roles for this account
+  local account_id
+  account_id=$(aws --profile "$profile_name" sts get-caller-identity --query "Account" --output text)
+  local role_name
+  role_name=$(echo "$profile_name" | awk -F'@' '{print $1}')
+  
+  if [[ "$role_name" == "eng_readonly" ]]; then
+    # Count number of profiles for this account
+    local profile_count
+    profile_count=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | \
+      sed 's/^profile //' | \
+      while IFS= read -r p; do
+        a=$(aws --profile "$p" sts get-caller-identity --query "Account" --output text 2>/dev/null)
+        if [[ "$a" == "$account_id" ]]; then
+          echo "$p"
+        fi
+      done | wc -l)
+    
+    if ((profile_count > 1)); then
+      return 0
+    fi
+  fi
+  
   for region in $(aws --profile "$profile_name" ec2 describe-regions --query "Regions[].RegionName" --output text); do
     clusters=$(aws --profile "$profile_name" eks list-clusters --region "$region" --query "clusters[]" --output text)
     if [[ -n "$clusters" ]]; then
       for cluster in $clusters; do
-        msg "info" "Updating kubeconfig for cluster: $cluster in region: $region with profile: $profile_name"
-        aws --profile "$profile_name" eks update-kubeconfig --region "$region" --name "$cluster"
+        echo "Updating kubeconfig for cluster: $cluster in region: $region with profile: $profile_name"
+        # Use just the cluster name instead of ARN, and suppress stdout
+        KUBECONFIG="$temp_config" aws --profile "$profile_name" eks update-kubeconfig \
+          --region "$region" \
+          --name "$cluster" \
+          --alias "$cluster" \
+          >/dev/null
       done
     fi
   done
@@ -971,56 +1004,126 @@ process_profile() {
 
 detect_eks_clusters() {
   [[ ! -d "${KUBE_HOME}" ]] && mkdir -p "${KUBE_HOME}"
+  [[ ! -f "${KUBE_HOME}/config" ]] && touch "${KUBE_HOME}/config"
+  
+  # Create temp directory for configs
+  local temp_dir
+  temp_dir=$(mktemp -d "${KUBE_HOME}/configs.XXXXXX")
+  
+  # Export all necessary functions and variables
+  export KUBE_HOME
   export -f process_profile
-  awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //' | \
-    xargs -I {} -P 10 bash -c 'process_profile "$@"' _ "{}"
+  export -f msg
+  export -f error
+  export -f info
+  export -f warn
+  export -f success
+  
+  # Process profiles in parallel, each writing to its own temp file
+  while IFS= read -r profile; do
+    temp_file="${temp_dir}/${profile//\//_}.yaml"
+    touch "$temp_file"
+    bash -c "process_profile '$profile' '$temp_file'" &
+  done < <(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //')
+  
+  # Wait for all background processes to complete
+  wait
+  
+  # Merge all configs
+  local kubeconfigs="${KUBE_HOME}/config"
+  for config in "${temp_dir}"/*.yaml; do
+    if [[ -s "$config" ]]; then
+      kubeconfigs+=":${config}"
+    fi
+  done
+  
+  if [[ "$kubeconfigs" != "${KUBE_HOME}/config" ]]; then
+    KUBECONFIG="$kubeconfigs" kubectl config view --flatten > "${KUBE_HOME}/config.merged"
+    mv "${KUBE_HOME}/config.merged" "${KUBE_HOME}/config"
+  fi
+  
+  # Cleanup
+  rm -rf "$temp_dir"
+}
+
+check_for_updates() {
+  local latest_version
+  msg "info" "Checking for updates..."
+  
+  # Get the latest release version from GitHub API
+  latest_version=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | \
+    jq -r '.tag_name // empty')
+    
+  if [[ -z "$latest_version" ]]; then
+    msg "warn" "No releases found in ${GITHUB_REPO}"
+    return 0
+  fi
+  
+  # Remove 'v' prefix if present for comparison
+  latest_version=${latest_version#v}
+  current_version=${VERSION#v}
+  
+  # Compare versions (simple string comparison for now)
+  if [[ "$latest_version" != "$current_version" ]]; then
+    msg "warn" "New version available: ${latest_version} (current: ${current_version})"
+    msg "info" "Visit https://github.com/${GITHUB_REPO}/releases/latest to download"
+  else
+    msg "success" "You are running the latest version (${current_version})"
+  fi
 }
 
 usage() {
-  cat <<EOF
-${bd}${mg}AWS Context Manager${nc}
-
-${cy}Description:${nc}
-  ${wh}This script helps interact with multiple AWS account profiles by generating an AWS${nc}
-  ${wh}config that includes profiles for all accounts and roles associated with an AWS SSO${nc}
-  ${wh}profile.${nc}
-  ${wh}Once the profiles are generated, you can use $(basename "$0") (with no options)${nc}
-  ${wh}to select from a list of accounts, and easily search/switch between them.${nc}
-
-${cy}Usage: ${mg}$(basename "$0") ${yl}[options]${nc}
-
-${cy}Options:${nc}
-  ${yl}-b ${bl}<browser>${nc}           Specify the browser to use for AWS SSO login.
-                         Use 'none' to disable browser and use --no-browser option.
-  ${yl}-g${nc}                     Generate AWS config profiles from AWS SSO
-  ${yl}-i${nc}                     Initialize AWS SSO configuration and login
-  ${yl}-k${nc}                     Detect EKS clusters and update kubeconfig
-  ${yl}-m${nc}                     Generate an AWS Region Heatmap for the current profile
-  ${yl}-o ${bl}<output_format>${nc}     Specify the output format for AWS CLI commands
-                         Valid options: ${it}json${nc}, ${it}text${nc}, ${it}table${nc}, ${it}yaml${nc}, ${it}yaml-stream${nc}
-  ${yl}-r${nc}                     Change region for the current context
-  ${yl}-v${nc}                     Enable verbose mode
-  ${yl}-h, --help${nc}             Display this help message and exit
-
-${cy}Examples:${nc}
-  ${it}${gr}$(basename "$0") -i${nc}
-      Initialize AWS SSO configuration and login
-  ${it}${gr}$(basename "$0") -g${nc}
-      Generate AWS config profiles from AWS SSO
-  ${it}${gr}$(basename "$0") -k${nc}
-      Detect EKS clusters and update kubeconfig
-  ${it}${gr}$(basename "$0") -m${nc}
-      Generate an AWS Region Heatmap for the current profile
-  ${it}${gr}$(basename "$0") -o json${nc}
-      Specify the output format as JSON for AWS CLI commands
-  ${it}${gr}$(basename "$0") -b firefox${nc}
-      Use Firefox as the browser for AWS SSO login
-  ${it}${gr}$(basename "$0") -b none${nc}
-      Use --no-browser option for AWS SSO login
-  ${it}${gr}$(basename "$0") -v${nc}
-      Enable verbose mode
-
-EOF
+  msg "title" "AWS Context Manager"
+  echo
+  
+  msg "section" "Description:"
+  msg "info" "This script helps interact with multiple AWS account profiles by generating an AWS"
+  msg "info" "config that includes profiles for all accounts and roles associated with an AWS SSO"
+  msg "info" "profile."
+  msg "info" "Once the profiles are generated, you can use $(basename "$0") (with no options)"
+  msg "info" "to select from a list of accounts, and easily search/switch between them."
+  echo
+  
+  msg "section" "Usage: $(basename "$0") [options]"
+  echo
+  
+  msg "section" "Options:"
+  msg "option" "-b <browser>           Specify the browser to use for AWS SSO login."
+  msg "info"   "                       Use 'none' to disable browser and use --no-browser option."
+  msg "option" "-c                     Check for updates"
+  msg "option" "-g                     Generate AWS config profiles from AWS SSO"
+  msg "option" "-i                     Initialize AWS SSO configuration and login"
+  msg "option" "-k                     Detect EKS clusters and update kubeconfig"
+  msg "option" "-m                     Generate an AWS Region Heatmap for the current profile"
+  msg "option" "-o <output_format>     Specify the output format for AWS CLI commands"
+  msg "info"   "                       Valid options: json, text, table, yaml, yaml-stream"
+  msg "option" "-r                     Change region for the current context"
+  msg "option" "-v                     Enable verbose mode"
+  msg "option" "-h, --help            Display this help message and exit"
+  echo
+  
+  msg "section" "Examples:"
+  msg "example" "$(basename "$0") -i"
+  msg "info"    "    Initialize AWS SSO configuration and login"
+  msg "example" "$(basename "$0") -g"
+  msg "info"    "    Generate AWS config profiles from AWS SSO"
+  msg "example" "$(basename "$0") -k"
+  msg "info"    "    Detect EKS clusters and update kubeconfig"
+  msg "example" "$(basename "$0") -m"
+  msg "info"    "    Generate an AWS Region Heatmap for the current profile"
+  msg "example" "$(basename "$0") -o json"
+  msg "info"    "    Specify the output format as JSON for AWS CLI commands"
+  msg "example" "$(basename "$0") -b firefox"
+  msg "info"    "    Use Firefox as the browser for AWS SSO login"
+  msg "example" "$(basename "$0") -b none"
+  msg "info"    "    Use --no-browser option for AWS SSO login"
+  msg "example" "$(basename "$0") -c"
+  msg "info"    "    Check for available updates"
+  msg "example" "$(basename "$0") -v"
+  msg "info"    "    Enable verbose mode"
+  echo
+  
+  msg "section" "Version: ${VERSION}"
 }
 
 change_region() {
@@ -1098,60 +1201,58 @@ change_region() {
   msg "success" "Updated default profile region to: $SELECTED_REGION" "🌍"
 }
 
-while getopts "b:ghikmvo:r" opt; do
+while getopts ":b:cghikmvo:r" opt; do
   case $opt in
-  b) BROWSER_OVERRIDE="$OPTARG" ;;
-  g) 
-    GENERATE_CONFIG="true"
-    if [[ -z "$OUTPUT_FORMAT" ]]; then
-      validate_output
-    fi
-    ;;
-  h)
-    usage
-    exit 0
-    ;;
-  i) setup_aws_config ;;
-  k)
-    check_command "kubectl" "https://kubernetes.io/docs/tasks/tools/"
-    echo -n "${bl}Detecting EKS clusters... (This can take a while)${nc}"
-    use_spinner detect_eks_clusters
-    echo "${bl}Detecting EKS clusters...${gr}✓${nc}"
-    exit 0
-    ;;
-  m)
-    CURRENT_PROFILE=$(grep -b2 "$(aws configure get profile.default.sso_account_id)" ~/.aws/config | grep 'profile' | cut -d' ' -f2 | cut -d']' -f1)
-    echo "${mg}Generating AWS Region Heatmap for $CURRENT_PROFILE...${nc}"
-    regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
-    calculate_region_counts || {
-      error "Failed to calculate region counts" "❌"
+    b) BROWSER_OVERRIDE="$OPTARG" ;;
+    c) check_for_updates; exit 0 ;;
+    g)
+      GENERATE_CONFIG="true"
+      if [[ -z "$OUTPUT_FORMAT" ]]; then
+        validate_output
+      fi
+      ;;
+    h) usage; exit 0 ;;
+    i) setup_aws_config ;;
+    k)
+      check_command "kubectl" "https://kubernetes.io/docs/tasks/tools/"
+      echo -n "${bl}Detecting EKS clusters... (This can take a while)${nc}"
+      use_spinner detect_eks_clusters
+      echo "${bl}Detecting EKS clusters...${gr}✓${nc}"
+      exit 0
+      ;;
+    m)
+      CURRENT_PROFILE=$(grep -b2 "$(aws configure get profile.default.sso_account_id)" ~/.aws/config | grep 'profile' | cut -d' ' -f2 | cut -d']' -f1)
+      echo "${mg}Generating AWS Region Heatmap for $CURRENT_PROFILE...${nc}"
+      regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
+      calculate_region_counts || {
+        error "Failed to calculate region counts" "❌"
+        exit 1
+      }
+      print_heatmap || {
+        error "Failed to print heatmap" "❌"
+        exit 1
+      }
+      exit 0
+      ;;
+    o) OUTPUT_FORMAT="$OPTARG" ;;
+    r)
+      change_region
+      exit 0
+      ;;
+    v)
+      DEBUG=true
+      set -x
+      ;;
+    \?)
+      echo "${rd}Invalid option: -$OPTARG 👮🏻‍♂️${nc}"
+      usage
       exit 1
-    }
-    print_heatmap || {
-      error "Failed to print heatmap" "❌"
+      ;;
+    :)
+      echo "${rd}Option -$OPTARG requires an argument 😑${nc}"
+      usage
       exit 1
-    }
-    exit 0
-    ;;
-  o) OUTPUT_FORMAT="$OPTARG" ;;
-  r)
-    change_region
-    exit 0
-    ;;
-  v)
-    DEBUG=true
-    set -x
-    ;;
-  \?)
-    echo "${rd}Invalid option: -$OPTARG 👮🏻‍♂️${nc}"
-    usage
-    exit 1
-    ;;
-  :)
-    echo "${rd}Option -$OPTARG requires an argument 😑${nc}"
-    usage
-    exit 1
-    ;;
+      ;;
   esac
 done
 
