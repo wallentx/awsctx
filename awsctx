@@ -10,117 +10,117 @@ GITHUB_REPO="wallentx/awsctx"
 
 # Check for color support
 if ! tput colors >/dev/null 2>&1; then
-    echo "Warning: Your terminal doesn't support colors. Some features may not display correctly."
-    # Define color variables as empty strings
-    rd=gr=yl=bl=mg=cy=wh=gy=or=it=bd=nc=""
+  echo "Warning: Your terminal doesn't support colors. Some features may not display correctly."
+  # Define color variables as empty strings
+  rd=gr=yl=bl=mg=cy=wh=gy=or=it=bd=nc=""
 else
-    # Colors
-    rd=$(tput setaf 1)   # Red
-    gr=$(tput setaf 2)   # Green
-    yl=$(tput setaf 3)   # Yellow
-    bl=$(tput setaf 4)   # Blue
-    mg=$(tput setaf 5)   # Magenta
-    cy=$(tput setaf 6)   # Cyan
-    wh=$(tput setaf 7)   # White
-    gy=$(tput setaf 8)   # Gray
-    or=$(tput setaf 208) # Orange
-    it=$(tput sitm)      # Italic
-    bd=$(tput bold)      # Bold
-    nc=$(tput sgr0)      # No Color / Reset
+  # Colors
+  rd=$(tput setaf 1)   # Red
+  gr=$(tput setaf 2)   # Green
+  yl=$(tput setaf 3)   # Yellow
+  bl=$(tput setaf 4)   # Blue
+  mg=$(tput setaf 5)   # Magenta
+  cy=$(tput setaf 6)   # Cyan
+  wh=$(tput setaf 7)   # White
+  gy=$(tput setaf 8)   # Gray
+  or=$(tput setaf 208) # Orange
+  it=$(tput sitm)      # Italic
+  bd=$(tput bold)      # Bold
+  nc=$(tput sgr0)      # No Color / Reset
 fi
 
 # Unified message handling function
 msg() {
-    local class="$1"
-    local message="$2"
-    local extra="${3:-}"  # Used for default value, icon, or other extras
-    local response
+  local class="$1"
+  local message="$2"
+  local extra="${3:-}" # Used for default value, icon, or other extras
+  local response
 
-    case "$class" in
-        "header")  echo "${bd}${mg}$message${nc}" ;;
-        "success") echo "${gr}$message${extra:+ $extra}${nc}" ;;
-        "warning") echo "${yl}$message${extra:+ $extra}${nc}" ;;
-        "error")   echo "${rd}$message${extra:+ $extra}${nc}" ;;
-        "info")    echo "${wh}$message${nc}" ;;
-        "help")    echo "${gy}$message${nc}" ;;
-        "example") echo "${gy}${it}$message${nc}" ;;
-        "code")    echo "${bl}$message${nc}" ;;
-        "highlight") echo "${or}$message${nc}" ;;
-        "section") echo "${cy}$message${nc}" ;;
-        "status")  echo "${gy}$message${extra:+ $extra}${nc}" ;;
+  case "$class" in
+  "header") echo "${bd}${mg}$message${nc}" ;;
+  "success") echo "${gr}$message${extra:+ $extra}${nc}" ;;
+  "warning") echo "${yl}$message${extra:+ $extra}${nc}" ;;
+  "error") echo "${rd}$message${extra:+ $extra}${nc}" ;;
+  "info") echo "${wh}$message${nc}" ;;
+  "help") echo "${gy}$message${nc}" ;;
+  "example") echo "${gy}${it}$message${nc}" ;;
+  "code") echo "${bl}$message${nc}" ;;
+  "highlight") echo "${or}$message${nc}" ;;
+  "section") echo "${cy}$message${nc}" ;;
+  "status") echo "${gy}$message${extra:+ $extra}${nc}" ;;
 
-        # Interactive prompts
-        "question")
-            local default="${extra:-}"
-            local prompt
+  # Interactive prompts
+  "question")
+    local default="${extra:-}"
+    local prompt
 
-            # Format based on default value
-            if [[ "${default,,}" == "n" ]]; then
-                prompt="${mg}$message ${bl}[${gr}y${bl}/${rd}N${bl}]${nc}"
-            elif [[ "${default,,}" == "y" ]]; then
-                prompt="${mg}$message ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}"
-            else
-                prompt="${mg}$message ${bl}[${gr}y${bl}/${rd}n${bl}]${nc}"
-            fi
+    # Format based on default value
+    if [[ ${default,,} == "n" ]]; then
+      prompt="${mg}$message ${bl}[${gr}y${bl}/${rd}N${bl}]${nc}"
+    elif [[ ${default,,} == "y" ]]; then
+      prompt="${mg}$message ${bl}[${gr}Y${bl}/${rd}n${bl}]${nc}"
+    else
+      prompt="${mg}$message ${bl}[${gr}y${bl}/${rd}n${bl}]${nc}"
+    fi
 
-            while true; do
-                echo -n "$prompt: "
-                read -r response
+    while true; do
+      echo -n "$prompt: "
+      read -r response
 
-                # Handle empty response
-                if [[ -z "$response" ]]; then
-                    [[ -n "$default" ]] && response="$default" && break
-                    continue
-                fi
-                
-                # Handle valid responses
-                if [[ "${response,,}" =~ ^[yn]$ ]]; then
-                    break
-                fi
-                
-                echo -e "${rd}Please answer y or n${nc}"
-            done
-            
-            [[ "${response,,}" =~ ^y ]]
-            return $?
-            ;;
-            
-        "input")
-            printf "${mg}%s${nc}: " "$message" >&2
-            read -r response
-            echo "$response"
-            ;;
-            
-        "input_default")
-            printf "${mg}%s ${bl}[${wh}%s${bl}]${nc}: " "$message" "$extra" >&2
-            read -r response
-            echo "${response:-$extra}"
-            ;;
-            
-        "select")
-            local -a options=("${@:3}")  # Get all args after class and message
-            
-            # Display the menu to stderr
-            for i in "${!options[@]}"; do
-                printf '%s%d%s %s%s\n' "${bl}" "$((i+1))" "${gy})" "${wh}${options[$i]}" "${nc}" >&2
-            done
-            
-            # Get selection
-            printf '%s%s%s: ' "${mg}" "$message" "${nc}" >&2
-            read -r selection
-            
-            # Validate and return selection
-            if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#options[@]}" ]; then
-                echo "${options[$((selection-1))]}"
-                return 0
-            else
-                printf '%s%s%s\n' "${rd}" "Invalid selection." "${nc}" >&2
-                msg "select" "$message" "${options[@]}"
-            fi
-            ;;
-            
-        *) echo "$message" ;;
-    esac
+      # Handle empty response
+      if [[ -z $response ]]; then
+        [[ -n $default ]] && response="$default" && break
+        continue
+      fi
+
+      # Handle valid responses
+      if [[ ${response,,} =~ ^[yn]$ ]]; then
+        break
+      fi
+
+      echo -e "${rd}Please answer y or n${nc}"
+    done
+
+    [[ ${response,,} =~ ^y ]]
+    return $?
+    ;;
+
+  "input")
+    printf "${mg}%s${nc}: " "$message" >&2
+    read -r response
+    echo "$response"
+    ;;
+
+  "input_default")
+    printf "${mg}%s ${bl}[${wh}%s${bl}]${nc}: " "$message" "$extra" >&2
+    read -r response
+    echo "${response:-$extra}"
+    ;;
+
+  "select")
+    local -a options=("${@:3}") # Get all args after class and message
+
+    # Display the menu to stderr
+    for i in "${!options[@]}"; do
+      printf '%s%d%s %s%s\n' "${bl}" "$((i + 1))" "${gy})" "${wh}${options[$i]}" "${nc}" >&2
+    done
+
+    # Get selection
+    printf '%s%s%s: ' "${mg}" "$message" "${nc}" >&2
+    read -r selection
+
+    # Validate and return selection
+    if [[ $selection =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#options[@]}" ]; then
+      echo "${options[$((selection - 1))]}"
+      return 0
+    else
+      printf '%s%s%s\n' "${rd}" "Invalid selection." "${nc}" >&2
+      msg "select" "$message" "${options[@]}"
+    fi
+    ;;
+
+  *) echo "$message" ;;
+  esac
 }
 
 # Aliases for common message types (optional, for convenience)
@@ -158,7 +158,7 @@ get_config_file() {
   local config_dir
   config_dir=$(get_config_dir)
 
-  if [[ "$config_dir" == "${HOME}" ]]; then
+  if [[ $config_dir == "${HOME}" ]]; then
     echo "${HOME}/.awsctxrc"
   else
     echo "${config_dir}/awsctxrc"
@@ -171,7 +171,7 @@ load_config() {
   local config_dir
   config_dir=$(dirname "$config_file")
 
-  if [[ ! -f "$config_file" ]]; then
+  if [[ ! -f $config_file ]]; then
     error "AWS Context configuration file not found at: $config_file"
     info "Would you like to create a new configuration file?"
     if ask "Create config file?"; then
@@ -183,13 +183,13 @@ load_config() {
   fi
 
   # Check if config file is readable
-  if [[ ! -r "$config_file" ]]; then
+  if [[ ! -r $config_file ]]; then
     error "Config file exists but is not readable: $config_file" "😢"
     exit 1
   fi
 
   # Source the config file
-  if [[ -f "$config_file" ]]; then
+  if [[ -f $config_file ]]; then
     # shellcheck source=/dev/null
     source "$config_file"
   else
@@ -198,9 +198,9 @@ load_config() {
   fi
 
   # Validate required variables
-  if [[ -z "${SSO_START_URL:-}" ]] || [[ -z "${SSO_REGION:-}" ]] || \
-     [[ -z "${SSO_REGISTRATION_SCOPES:-}" ]] || [[ -z "${CROSS_ACCOUNT_PROFILE:-}" ]] || \
-     [[ -z "${OUTPUT_FORMAT:-}" ]]; then
+  if [[ -z ${SSO_START_URL:-} ]] || [[ -z ${SSO_REGION:-} ]] ||
+    [[ -z ${SSO_REGISTRATION_SCOPES:-} ]] || [[ -z ${CROSS_ACCOUNT_PROFILE:-} ]] ||
+    [[ -z ${OUTPUT_FORMAT:-} ]]; then
     error "Config file is missing required variables" "😕"
     warn "Please ensure all required variables are set in: $config_file"
     info "Would you like to update the configuration file?"
@@ -213,7 +213,7 @@ load_config() {
   fi
 
   # Basic format check for region (just to catch obvious typos)
-  if [[ ! "$SSO_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]{1}$ ]]; then
+  if [[ ! $SSO_REGION =~ ^[a-z]{2}-[a-z]+-[0-9]{1}$ ]]; then
     error "Invalid AWS region format in config file: $SSO_REGION" "⚠️"
     info "Region should be in the format: us-east-1, eu-west-2, etc."
     exit 1
@@ -231,7 +231,7 @@ create_config() {
   echo
 
   # Create config directory if it doesn't exist
-  if [[ "$config_dir" != "${HOME}" ]]; then
+  if [[ $config_dir != "${HOME}" ]]; then
     mkdir -p "$config_dir"
   fi
 
@@ -242,10 +242,10 @@ create_config() {
     code "Format: d-xxxxxxxx"
     example "Example: d-a1b2c3d4e5"
     info "You can find this in your AWS SSO console under 'Directory ID'"
-    if [[ -n "${SSO_START_URL:-}" ]]; then
+    if [[ -n ${SSO_START_URL:-} ]]; then
       # Extract just the directory ID from the full URL if needed
       local default_id
-      if [[ "$SSO_START_URL" =~ ^https:// ]]; then
+      if [[ $SSO_START_URL =~ ^https:// ]]; then
         default_id=$(echo "$SSO_START_URL" | sed -E 's|https://([^.]+)\.awsapps\.com/start|\1|')
       else
         default_id="$SSO_START_URL"
@@ -257,7 +257,7 @@ create_config() {
     fi
     echo
 
-    if [[ "$SSO_START_URL" =~ ^[a-zA-Z0-9-]+$ ]]; then
+    if [[ $SSO_START_URL =~ ^[a-zA-Z0-9-]+$ ]]; then
       # Construct the full SSO start URL
       SSO_START_URL="https://${SSO_START_URL}.awsapps.com/start"
       break
@@ -271,7 +271,7 @@ create_config() {
     code "AWS Region"
     info "This is the AWS region where your SSO is configured"
     highlight "Example: us-east-1"
-    if [[ -n "${SSO_REGION:-}" ]]; then
+    if [[ -n ${SSO_REGION:-} ]]; then
       input=$(prompt_default "Enter AWS Region" "$SSO_REGION")
       SSO_REGION=${input}
     else
@@ -279,7 +279,7 @@ create_config() {
     fi
     echo
 
-    if [[ "$SSO_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]{1}$ ]]; then
+    if [[ $SSO_REGION =~ ^[a-z]{2}-[a-z]+-[0-9]{1}$ ]]; then
       break
     else
       error "Invalid region format. Please enter a region in the format: us-east-1, eu-west-2, etc."
@@ -290,7 +290,7 @@ create_config() {
   code "SSO Registration Scopes"
   info "This is the SSO permission scope for your AWS account"
   highlight "Example: sso:account:access"
-  if [[ -n "${SSO_REGISTRATION_SCOPES:-}" ]]; then
+  if [[ -n ${SSO_REGISTRATION_SCOPES:-} ]]; then
     input=$(prompt_default "Enter SSO Registration Scopes" "$SSO_REGISTRATION_SCOPES")
     SSO_REGISTRATION_SCOPES=${input}
   else
@@ -302,7 +302,7 @@ create_config() {
   code "Cross Account Profile"
   info "This is the name of the AWS profile that will be used to assume roles in other accounts"
   highlight "Example: cross-account-access"
-  if [[ -n "${CROSS_ACCOUNT_PROFILE:-}" ]]; then
+  if [[ -n ${CROSS_ACCOUNT_PROFILE:-} ]]; then
     input=$(prompt_default "Enter Cross Account Profile name" "$CROSS_ACCOUNT_PROFILE")
     CROSS_ACCOUNT_PROFILE=${input}
   else
@@ -314,7 +314,7 @@ create_config() {
   code "AWS CLI Output Format"
   info "This is the default output format for AWS CLI commands"
   highlight "Example: json, text, table, yaml, yaml-stream"
-  
+
   # Define options for output format selection
   local output_options=(
     "json"
@@ -323,12 +323,12 @@ create_config() {
     "yaml"
     "yaml-stream"
   )
-  
+
   # Use fzf to get user's choice
   local selected_format
   selected_format=$(select_option "Select output format" "${output_options[@]}")
-  
-  if [[ -n "$selected_format" ]]; then
+
+  if [[ -n $selected_format ]]; then
     OUTPUT_FORMAT="$selected_format"
   else
     error "No output format selected. Using default: json" "⚠️"
@@ -346,40 +346,40 @@ create_config() {
       "more (Simple pager)"
       "custom (Enter your own pager command)"
     )
-    
+
     # Use fzf to get user's choice
     local selected_pager
     selected_pager=$(select_option "Select pager" "${pager_options[@]}")
-    
+
     case "$selected_pager" in
-      "bat -Ppl yaml (Syntax highlighted output - requires bat)")
-        # Check if bat is installed
-        if ! command -v bat &> /dev/null; then
-          error "bat is not installed. Please install bat to use this option." "⚠️"
-          info "https://github.com/sharkdp/bat#installation"
-          CLI_PAGER=""
-        else
-          CLI_PAGER="bat -Ppl yaml"
-        fi
-        ;;
-      "less (Standard pager)")
-        CLI_PAGER="less"
-        ;;
-      "more (Simple pager)")
-        CLI_PAGER="more"
-        ;;
-      "custom (Enter your own pager command)")
-        CLI_PAGER=$(prompt "Enter your custom pager command")
-        ;;
-      *)
-        warn "Invalid selection. No pager will be set." "⚠️"
+    "bat -Ppl yaml (Syntax highlighted output - requires bat)")
+      # Check if bat is installed
+      if ! command -v bat &>/dev/null; then
+        error "bat is not installed. Please install bat to use this option." "⚠️"
+        info "https://github.com/sharkdp/bat#installation"
         CLI_PAGER=""
-        ;;
+      else
+        CLI_PAGER="bat -Ppl yaml"
+      fi
+      ;;
+    "less (Standard pager)")
+      CLI_PAGER="less"
+      ;;
+    "more (Simple pager)")
+      CLI_PAGER="more"
+      ;;
+    "custom (Enter your own pager command)")
+      CLI_PAGER=$(prompt "Enter your custom pager command")
+      ;;
+    *)
+      warn "Invalid selection. No pager will be set." "⚠️"
+      CLI_PAGER=""
+      ;;
     esac
   fi
 
   # Write config file
-  cat > "$config_file" << EOF
+  cat >"$config_file" <<EOF
 # AWS Context Manager Configuration
 # This file contains your AWS SSO configuration
 # You can modify these values at any time
@@ -427,9 +427,9 @@ check_command "fzf" "https://github.com/junegunn/fzf"
 check_aws_cli_v2
 
 # Set up debug mode if enabled
-if [[ "$DEBUG" == "true" ]]; then
-    set -x
-    PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+if [[ $DEBUG == "true" ]]; then
+  set -x
+  PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 fi
 
 # Load configuration
@@ -441,18 +441,18 @@ SSO_CACHE_DIR="${AWS_CONFIG_HOME}/sso/cache"
 KUBE_HOME="${HOME}/.kube"
 CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u "+%Y-%m-%dT%H:%M:%SZ")
 
-[[ ! -d "${AWS_CONFIG_HOME}" ]] && mkdir -p "${AWS_CONFIG_HOME}"
-[[ ! -e "${AWS_CONFIG_FILE}" ]] && touch "${AWS_CONFIG_FILE}"
+[[ ! -d ${AWS_CONFIG_HOME} ]] && mkdir -p "${AWS_CONFIG_HOME}"
+[[ ! -e ${AWS_CONFIG_FILE} ]] && touch "${AWS_CONFIG_FILE}"
 
 # Create temporary files with better error handling
 create_temp_file() {
-    local temp_file
-    temp_file=$(mktemp "${AWS_CONFIG_HOME}/$1.XXXXXX" 2>/dev/null)
-    if [[ -z "$temp_file" ]]; then
-        error "Failed to create temporary file for $1" "😢"
-        exit 1
-    fi
-    echo "$temp_file"
+  local temp_file
+  temp_file=$(mktemp "${AWS_CONFIG_HOME}/$1.XXXXXX" 2>/dev/null)
+  if [[ -z $temp_file ]]; then
+    error "Failed to create temporary file for $1" "😢"
+    exit 1
+  fi
+  echo "$temp_file"
 }
 
 AWS_CONFIG_PROFILES=$(create_temp_file "AWS_CONFIG_PROFILES")
@@ -463,7 +463,8 @@ TMP_ROLES=$(create_temp_file "TMP_ROLES")
 WRITE_TMP=$(create_temp_file "WRITE_TMP")
 SPINTMP=$(create_temp_file "SPINTMP")
 REGION_COUNTS=$(create_temp_file "aws_region_counts")
-SESSION_BLOCK=$(cat <<-EOF
+SESSION_BLOCK=$(
+  cat <<-EOF
 [sso-session awsctx]
 sso_start_url = $SSO_START_URL
 sso_region = $SSO_REGION
@@ -477,14 +478,14 @@ EOF
 
 cleanup_temp_files() {
   # Only attempt to remove files if their variables are set and the files exist
-  [[ -n "$ACCOUNTS_LIST" && -f "$ACCOUNTS_LIST" ]] && rm -f "$ACCOUNTS_LIST"
-  [[ -n "$ACCOUNTS_ROLES" && -f "$ACCOUNTS_ROLES" ]] && rm -f "$ACCOUNTS_ROLES"
-  [[ -n "$CTX_CONFIG" && -f "$CTX_CONFIG" ]] && rm -f "$CTX_CONFIG"
-  [[ -n "$TMP_ROLES" && -f "$TMP_ROLES" ]] && rm -f "$TMP_ROLES"
-  [[ -n "$WRITE_TMP" && -f "$WRITE_TMP" ]] && rm -f "$WRITE_TMP"
-  [[ -n "$AWS_CONFIG_PROFILES" && -f "$AWS_CONFIG_PROFILES" ]] && rm -f "$AWS_CONFIG_PROFILES"
-  [[ -n "$SPINTMP" && -f "$SPINTMP" ]] && rm -f "$SPINTMP"
-  [[ -n "$REGION_COUNTS" && -f "$REGION_COUNTS" ]] && rm -f "$REGION_COUNTS"
+  [[ -n $ACCOUNTS_LIST && -f $ACCOUNTS_LIST ]] && rm -f "$ACCOUNTS_LIST"
+  [[ -n $ACCOUNTS_ROLES && -f $ACCOUNTS_ROLES ]] && rm -f "$ACCOUNTS_ROLES"
+  [[ -n $CTX_CONFIG && -f $CTX_CONFIG ]] && rm -f "$CTX_CONFIG"
+  [[ -n $TMP_ROLES && -f $TMP_ROLES ]] && rm -f "$TMP_ROLES"
+  [[ -n $WRITE_TMP && -f $WRITE_TMP ]] && rm -f "$WRITE_TMP"
+  [[ -n $AWS_CONFIG_PROFILES && -f $AWS_CONFIG_PROFILES ]] && rm -f "$AWS_CONFIG_PROFILES"
+  [[ -n $SPINTMP && -f $SPINTMP ]] && rm -f "$SPINTMP"
+  [[ -n $REGION_COUNTS && -f $REGION_COUNTS ]] && rm -f "$REGION_COUNTS"
 }
 
 shutdown() {
@@ -522,7 +523,7 @@ _spinner() {
   echo -ne "$CL"
   tput cnorm
   wait "$pid"
-  if [[ "$xtrace" == "on" ]]; then
+  if [[ $xtrace == "on" ]]; then
     set -x
   fi
 }
@@ -539,9 +540,9 @@ use_spinner() {
 }
 
 run_aws_sso_login() {
-  if [[ -n "$BROWSER_OVERRIDE" && "$BROWSER_OVERRIDE" != "none" ]]; then
+  if [[ -n $BROWSER_OVERRIDE && $BROWSER_OVERRIDE != "none" ]]; then
     BROWSER="$BROWSER_OVERRIDE" aws sso login --sso-session awsctx
-  elif [[ "$BROWSER_OVERRIDE" == "none" ]]; then
+  elif [[ $BROWSER_OVERRIDE == "none" ]]; then
     aws sso login --sso-session awsctx --no-browser
   else
     aws sso login --sso-session awsctx
@@ -550,9 +551,9 @@ run_aws_sso_login() {
 
 validate_output() {
   trap 'exit 2' SIGINT
-  if [[ -z "$OUTPUT_FORMAT" ]]; then
+  if [[ -z $OUTPUT_FORMAT ]]; then
     error "No output format provided with the ${it}-o${nc}${rd} flag 🪧${nc}"
-    
+
     # Define options for output format selection
     local output_options=(
       "json"
@@ -561,12 +562,12 @@ validate_output() {
       "yaml"
       "yaml-stream"
     )
-    
+
     # Use fzf to get user's choice
     local selected_format
     selected_format=$(select_option "Select output format" "${output_options[@]}")
-    
-    if [[ -n "$selected_format" ]]; then
+
+    if [[ -n $selected_format ]]; then
       OUTPUT_FORMAT="$selected_format"
     else
       error "No output format selected. Using default: json" "⚠️"
@@ -576,7 +577,7 @@ validate_output() {
   success "Output format selected: $OUTPUT_FORMAT" "✅"
 
   # Ask about CLI pager preference only if not already set
-  if [[ -z "${CLI_PAGER:-}" ]]; then
+  if [[ -z ${CLI_PAGER:-} ]]; then
     if ask "Would you like to set a CLI pager for AWS output?" "y"; then
       info "Common pager options:"
       # Define options for pager selection
@@ -586,35 +587,35 @@ validate_output() {
         "more (Simple pager)"
         "custom (Enter your own pager command)"
       )
-      
+
       # Use fzf to get user's choice
       local selected_pager
       selected_pager=$(select_option "Select pager" "${pager_options[@]}")
-      
+
       case "$selected_pager" in
-        "bat -Ppl yaml (Syntax highlighted output - requires bat)")
-          # Check if bat is installed
-          if ! command -v bat &> /dev/null; then
-            error "bat is not installed. Please install bat to use this option." "⚠️"
-            info "https://github.com/sharkdp/bat#installation"
-            CLI_PAGER=""
-          else
-            CLI_PAGER="bat -Ppl yaml"
-          fi
-          ;;
-        "less (Standard pager)")
-          CLI_PAGER="less"
-          ;;
-        "more (Simple pager)")
-          CLI_PAGER="more"
-          ;;
-        "custom (Enter your own pager command)")
-          CLI_PAGER=$(prompt "Enter your custom pager command")
-          ;;
-        *)
-          warn "Invalid selection. No pager will be set." "⚠️"
+      "bat -Ppl yaml (Syntax highlighted output - requires bat)")
+        # Check if bat is installed
+        if ! command -v bat &>/dev/null; then
+          error "bat is not installed. Please install bat to use this option." "⚠️"
+          info "https://github.com/sharkdp/bat#installation"
           CLI_PAGER=""
-          ;;
+        else
+          CLI_PAGER="bat -Ppl yaml"
+        fi
+        ;;
+      "less (Standard pager)")
+        CLI_PAGER="less"
+        ;;
+      "more (Simple pager)")
+        CLI_PAGER="more"
+        ;;
+      "custom (Enter your own pager command)")
+        CLI_PAGER=$(prompt "Enter your custom pager command")
+        ;;
+      *)
+        warn "Invalid selection. No pager will be set." "⚠️"
+        CLI_PAGER=""
+        ;;
       esac
     fi
   fi
@@ -623,7 +624,7 @@ validate_output() {
 setup_aws_config() {
   trap 'exit 2' SIGINT
   unset AWS_PROFILE
-  if [[ -e "${AWS_CONFIG_FILE}" && -s "${AWS_CONFIG_FILE}" ]]; then
+  if [[ -e ${AWS_CONFIG_FILE} && -s ${AWS_CONFIG_FILE} ]]; then
     warn "This will overwrite your existing AWS config file: ${AWS_CONFIG_FILE}" "⚠️"
     if ask "Would you like to backup your existing AWS config file?" "y"; then
       success "Backing up existing AWS config file: ${AWS_CONFIG_FILE}" "💾"
@@ -631,16 +632,16 @@ setup_aws_config() {
       touch "${AWS_CONFIG_FILE}"
     fi
   fi
-  echo "$SESSION_BLOCK" > "${AWS_CONFIG_FILE}"
+  echo "$SESSION_BLOCK" >"${AWS_CONFIG_FILE}"
   if run_aws_sso_login; then
     success "AWS SSO configuration initialized successfully" "✅"
     if ask "Would you like to generate AWS profiles now?" "y"; then
       GENERATE_CONFIG="true"
-      if [[ -z "$OUTPUT_FORMAT" ]]; then
+      if [[ -z $OUTPUT_FORMAT ]]; then
         validate_output
       fi
       generate_config
-      exit 0  # Exit after generating config to prevent double execution
+      exit 0 # Exit after generating config to prevent double execution
     else
       info "You can run '${bl}${bd}awsctx -g${nc}' later to generate your AWS profiles"
     fi
@@ -653,28 +654,28 @@ setup_aws_config() {
 count_resources() {
   local region=$1
   local count=0
-  
+
   # Use set +e to prevent individual AWS command failures from stopping the script
   set +e
-  
+
   # Capture counts, defaulting to 0 if commands fail
   local ec2_count=0
   local s3_count=0
   local lambda_count=0
   local rds_instance_count=0
   local rds_cluster_count=0
-  
+
   ec2_count=$(aws ec2 describe-instances --region "$region" --query "Reservations[*].Instances[*].[InstanceId]" --output text 2>/dev/null | wc -l) || ec2_count=0
-  if [[ "$region" == "us-east-1" ]]; then
+  if [[ $region == "us-east-1" ]]; then
     s3_count=$(aws s3api list-buckets --query "Buckets[*].Name" --output text 2>/dev/null | wc -l) || s3_count=0
   fi
   lambda_count=$(aws lambda list-functions --region "$region" --query "Functions[*].FunctionName" --output text 2>/dev/null | wc -l) || lambda_count=0
   rds_instance_count=$(aws rds describe-db-instances --region "$region" --query "DBInstances[*].DBInstanceIdentifier" --output text 2>/dev/null | wc -l) || rds_instance_count=0
   rds_cluster_count=$(aws rds describe-db-clusters --region "$region" --query "DBClusters[*].DBClusterIdentifier" --output text 2>/dev/null | wc -l) || rds_cluster_count=0
-  
+
   # Re-enable error checking
   set -e
-  
+
   count=$((ec2_count + s3_count + lambda_count + rds_instance_count + rds_cluster_count))
   printf "%s=%d\n" "$region" "$count" >>"$REGION_COUNTS"
   return 0
@@ -684,35 +685,35 @@ calculate_region_counts() {
   trap 'exit 2' SIGINT
   rm -f "$REGION_COUNTS"
   touch "$REGION_COUNTS"
-  
+
   # Clear the global associative array
   region_counts=()
-  
+
   # Read regions into array
   readarray -t region_array < <(echo "$regions" | tr '\t' '\n')
-  
+
   # Store PIDs for background processes
   pids=()
-  
+
   # Start all region counts in background
   for region in "${region_array[@]}"; do
     count_resources "$region" &
     pids+=($!)
   done
-  
+
   # Wait for all background processes to complete and check their exit status
   failed=0
   for pid in "${pids[@]}"; do
     wait "$pid" || ((failed++))
   done
-  
+
   # Read the results
   while IFS='=' read -r region count; do
-    if [[ -n "$region" && -n "$count" ]]; then
+    if [[ -n $region && -n $count ]]; then
       region_counts["$region"]=$count
     fi
   done <"$REGION_COUNTS"
-  
+
   # Find the maximum count and primary region
   max_count=0
   primary_region=""
@@ -722,7 +723,7 @@ calculate_region_counts() {
       primary_region=$region
     fi
   done
-  
+
   # Export scalar variables
   export max_count primary_region
   return 0
@@ -760,7 +761,7 @@ validate_token() {
     setup_aws_config
     return
   fi
-  if [[ ! -d "$SSO_CACHE_DIR" ]]; then
+  if [[ ! -d $SSO_CACHE_DIR ]]; then
     error "SSO cache directory not found: $SSO_CACHE_DIR" "😰"
     info "Proceeding to initialize your AWS CLI configuration..."
     setup_aws_config
@@ -768,16 +769,16 @@ validate_token() {
   fi
   LATEST_SSO_CACHE="$(find "${SSO_CACHE_DIR}" -type f -print0 | xargs -0 ls -t | head -n1)"
   ACCESS_TOKEN_FILE="${LATEST_SSO_CACHE}"
-  ACCESS_TOKEN=""  # Initialize ACCESS_TOKEN
-  if [[ ! -f "$ACCESS_TOKEN_FILE" ]]; then
+  ACCESS_TOKEN="" # Initialize ACCESS_TOKEN
+  if [[ ! -f $ACCESS_TOKEN_FILE ]]; then
     error "SSO access token could not be found" "😦"
     info "Proceeding to initialize your AWS CLI configuration..."
     setup_aws_config
     return
   else
     ACCESS_TOKEN=$(jq -e -r '.accessToken' "$ACCESS_TOKEN_FILE" || echo "")
-    if [[ -z "$ACCESS_TOKEN" ]]; then
-      if [[ ! -f "${AWS_CONFIG_FILE}" ]]; then
+    if [[ -z $ACCESS_TOKEN ]]; then
+      if [[ ! -f ${AWS_CONFIG_FILE} ]]; then
         error "AWS config file not found: $AWS_CONFIG_FILE" "🫥"
         info "Proceeding to initialize your AWS CLI configuration..."
         setup_aws_config
@@ -793,7 +794,7 @@ validate_token() {
       fi
     fi
     EXPIRES_AT=$(jq -e -r '.expiresAt' "$ACCESS_TOKEN_FILE")
-    if [[ "$CURRENT_TIME" > "$EXPIRES_AT" ]]; then
+    if [[ $CURRENT_TIME > $EXPIRES_AT ]]; then
       error "SSO access token has expired" "👴🏼"
       info "Please run '${bl}${bd}aws sso login --sso-session awsctx${nc}' to login to AWS SSO"
       if ask "Attempt to login to AWS SSO?" "y"; then
@@ -808,7 +809,7 @@ validate_token() {
 build_accounts_list() {
   # Ensure we have a valid token before proceeding
   validate_token
-  
+
   # Now we can safely use ACCESS_TOKEN as it will be set by validate_token
   aws \
     sso \
@@ -816,8 +817,8 @@ build_accounts_list() {
     --region us-east-1 \
     --access-token "$ACCESS_TOKEN" \
     --output json \
-    --query "accountList[].{accountName: accountName, accountId: accountId}" | \
-      jq 'map(
+    --query "accountList[].{accountName: accountName, accountId: accountId}" |
+    jq 'map(
         .accountName |= (
           # Convert to lowercase, replace spaces and special chars with hyphens
           gsub("[^a-zA-Z0-9-]"; "-") |
@@ -827,7 +828,7 @@ build_accounts_list() {
           gsub("^-|-$"; "")
         )
       ) | sort_by(.accountName|ascii_upcase)' \
-    >"$ACCOUNTS_LIST"
+      >"$ACCOUNTS_LIST"
 }
 
 accounts_load() {
@@ -836,10 +837,10 @@ accounts_load() {
 
 build_roles_list() {
   trap 'exit 2' SIGINT
-  
+
   # Ensure we have a valid token before proceeding
   validate_token
-  
+
   echo "[]" >"$ACCOUNTS_ROLES"
   jq -e -c '.[]' "$ACCOUNTS_LIST" | while read -r account; do
     ACCOUNT_ID=$(echo "$account" | jq -e -r '.accountId')
@@ -853,7 +854,7 @@ build_roles_list() {
         --output json \
         --query "sort_by(roleList, &roleName) | [].roleName"
     )
-    if [[ -z "$ROLES" || "$ROLES" == "[]" ]]; then
+    if [[ -z $ROLES || $ROLES == "[]" ]]; then
       warn "No roles found for account ID $ACCOUNT_ID 🙅"
       continue
     fi
@@ -879,13 +880,13 @@ write_config() {
     $0 ~ common_profile {in_default = 1; next}
     /^\[/ && in_default {in_default = 0}
     in_default && NF {print}
-  ' "${AWS_CONFIG_PROFILES}" > "$default_section"
+  ' "${AWS_CONFIG_PROFILES}" >"$default_section"
 
   # Write all config sections to AWS_CONFIG_PROFILES in a single operation
   {
     # Write session block
     echo "$SESSION_BLOCK"
-    
+
     # Write account profiles
     jq -r '
       # Group by accountName to detect duplicates
@@ -903,11 +904,11 @@ write_config() {
       "output = '"$OUTPUT_FORMAT"'\n" +
       if ("'"$CLI_PAGER"'" != "") then "cli_pager = '"$CLI_PAGER"'\n" else "" end
     ' "$ACCOUNTS_ROLES"
-    
+
     # Write default profile section
     echo "[default]"
     cat "$default_section"
-  } > "${AWS_CONFIG_PROFILES}"
+  } >"${AWS_CONFIG_PROFILES}"
 
   # Clean up temporary file
   rm -f "$default_section"
@@ -933,22 +934,22 @@ generate_config() {
 print_heatmap() {
   printf '\n%s%-14s%s │ %s%s%s\n' "${bl}" "Region" "${nc}" "${bl}" "Resources" "${nc}"
   printf '%-14s┼%s\n' "───────────────" "───────────"
-  
+
   # Sort regions alphabetically using mapfile
   mapfile -t sorted_regions < <(printf '%s\n' "${!region_counts[@]}" | sort)
-  
+
   for region in "${sorted_regions[@]}"; do
     local count=${region_counts["$region"]}
     local bar=""
-    
+
     if ((count > 0)); then
       bar=$(generate_bar "$count" "$max_count")
     fi
-    
+
     printf '%-14s │ %s\n' "$region" "$bar"
   done
-  
-  if [[ -n "$primary_region" ]]; then
+
+  if [[ -n $primary_region ]]; then
     printf '\n%s%s%s%s%s (%d resources)\n\n' \
       "${cy}" "The primary region with the majority of resources is: " \
       "${mg}" "$primary_region" "${nc}" \
@@ -962,33 +963,33 @@ print_heatmap() {
 process_profile() {
   local profile_name="$1"
   local temp_config="$2"
-  
+
   # Skip if this is eng_readonly and we have other roles for this account
   local account_id
   account_id=$(aws --profile "$profile_name" sts get-caller-identity --query "Account" --output text)
   local role_name
   role_name=$(echo "$profile_name" | awk -F'@' '{print $1}')
-  
-  if [[ "$role_name" == "eng_readonly" ]]; then
+
+  if [[ $role_name == "eng_readonly" ]]; then
     # Count number of profiles for this account
     local profile_count
-    profile_count=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | \
-      sed 's/^profile //' | \
+    profile_count=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" |
+      sed 's/^profile //' |
       while IFS= read -r p; do
         a=$(aws --profile "$p" sts get-caller-identity --query "Account" --output text 2>/dev/null)
-        if [[ "$a" == "$account_id" ]]; then
+        if [[ $a == "$account_id" ]]; then
           echo "$p"
         fi
       done | wc -l)
-    
+
     if ((profile_count > 1)); then
       return 0
     fi
   fi
-  
+
   for region in $(aws --profile "$profile_name" ec2 describe-regions --query "Regions[].RegionName" --output text); do
     clusters=$(aws --profile "$profile_name" eks list-clusters --region "$region" --query "clusters[]" --output text)
-    if [[ -n "$clusters" ]]; then
+    if [[ -n $clusters ]]; then
       for cluster in $clusters; do
         echo "Updating kubeconfig for cluster: $cluster in region: $region with profile: $profile_name"
         # Use just the cluster name instead of ARN, and suppress stdout
@@ -1003,13 +1004,13 @@ process_profile() {
 }
 
 detect_eks_clusters() {
-  [[ ! -d "${KUBE_HOME}" ]] && mkdir -p "${KUBE_HOME}"
+  [[ ! -d ${KUBE_HOME} ]] && mkdir -p "${KUBE_HOME}"
   [[ ! -f "${KUBE_HOME}/config" ]] && touch "${KUBE_HOME}/config"
-  
+
   # Create temp directory for configs
   local temp_dir
   temp_dir=$(mktemp -d "${KUBE_HOME}/configs.XXXXXX")
-  
+
   # Export all necessary functions and variables
   export KUBE_HOME
   export -f process_profile
@@ -1018,30 +1019,30 @@ detect_eks_clusters() {
   export -f info
   export -f warn
   export -f success
-  
+
   # Process profiles in parallel, each writing to its own temp file
   while IFS= read -r profile; do
     temp_file="${temp_dir}/${profile//\//_}.yaml"
     touch "$temp_file"
     bash -c "process_profile '$profile' '$temp_file'" &
   done < <(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //')
-  
+
   # Wait for all background processes to complete
   wait
-  
+
   # Merge all configs
   local kubeconfigs="${KUBE_HOME}/config"
   for config in "${temp_dir}"/*.yaml; do
-    if [[ -s "$config" ]]; then
+    if [[ -s $config ]]; then
       kubeconfigs+=":${config}"
     fi
   done
-  
-  if [[ "$kubeconfigs" != "${KUBE_HOME}/config" ]]; then
-    KUBECONFIG="$kubeconfigs" kubectl config view --flatten > "${KUBE_HOME}/config.merged"
+
+  if [[ $kubeconfigs != "${KUBE_HOME}/config" ]]; then
+    KUBECONFIG="$kubeconfigs" kubectl config view --flatten >"${KUBE_HOME}/config.merged"
     mv "${KUBE_HOME}/config.merged" "${KUBE_HOME}/config"
   fi
-  
+
   # Cleanup
   rm -rf "$temp_dir"
 }
@@ -1049,22 +1050,22 @@ detect_eks_clusters() {
 check_for_updates() {
   local latest_version
   msg "info" "Checking for updates..."
-  
+
   # Get the latest release version from GitHub API
-  latest_version=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | \
+  latest_version=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" |
     jq -r '.tag_name // empty')
-    
-  if [[ -z "$latest_version" ]]; then
+
+  if [[ -z $latest_version ]]; then
     msg "warn" "No releases found in ${GITHUB_REPO}"
     return 0
   fi
-  
+
   # Remove 'v' prefix if present for comparison
   latest_version=${latest_version#v}
   current_version=${VERSION#v}
-  
+
   # Compare versions (simple string comparison for now)
-  if [[ "$latest_version" != "$current_version" ]]; then
+  if [[ $latest_version != "$current_version" ]]; then
     msg "warn" "New version available: ${latest_version} (current: ${current_version})"
     msg "info" "Visit https://github.com/${GITHUB_REPO}/releases/latest to download"
   else
@@ -1075,7 +1076,7 @@ check_for_updates() {
 usage() {
   msg "title" "AWS Context Manager"
   echo
-  
+
   msg "section" "Description:"
   msg "info" "This script helps interact with multiple AWS account profiles by generating an AWS"
   msg "info" "config that includes profiles for all accounts and roles associated with an AWS SSO"
@@ -1083,111 +1084,111 @@ usage() {
   msg "info" "Once the profiles are generated, you can use $(basename "$0") (with no options)"
   msg "info" "to select from a list of accounts, and easily search/switch between them."
   echo
-  
+
   msg "section" "Usage: $(basename "$0") [options]"
   echo
-  
+
   msg "section" "Options:"
   msg "option" "-b <browser>           Specify the browser to use for AWS SSO login."
-  msg "info"   "                       Use 'none' to disable browser and use --no-browser option."
+  msg "info" "                       Use 'none' to disable browser and use --no-browser option."
   msg "option" "-c                     Check for updates"
   msg "option" "-g                     Generate AWS config profiles from AWS SSO"
   msg "option" "-i                     Initialize AWS SSO configuration and login"
   msg "option" "-k                     Detect EKS clusters and update kubeconfig"
   msg "option" "-m                     Generate an AWS Region Heatmap for the current profile"
   msg "option" "-o <output_format>     Specify the output format for AWS CLI commands"
-  msg "info"   "                       Valid options: json, text, table, yaml, yaml-stream"
+  msg "info" "                       Valid options: json, text, table, yaml, yaml-stream"
   msg "option" "-r                     Change region for the current context"
   msg "option" "-v                     Enable verbose mode"
   msg "option" "-h, --help            Display this help message and exit"
   echo
-  
+
   msg "section" "Examples:"
   msg "example" "$(basename "$0") -i"
-  msg "info"    "    Initialize AWS SSO configuration and login"
+  msg "info" "    Initialize AWS SSO configuration and login"
   msg "example" "$(basename "$0") -g"
-  msg "info"    "    Generate AWS config profiles from AWS SSO"
+  msg "info" "    Generate AWS config profiles from AWS SSO"
   msg "example" "$(basename "$0") -k"
-  msg "info"    "    Detect EKS clusters and update kubeconfig"
+  msg "info" "    Detect EKS clusters and update kubeconfig"
   msg "example" "$(basename "$0") -m"
-  msg "info"    "    Generate an AWS Region Heatmap for the current profile"
+  msg "info" "    Generate an AWS Region Heatmap for the current profile"
   msg "example" "$(basename "$0") -o json"
-  msg "info"    "    Specify the output format as JSON for AWS CLI commands"
+  msg "info" "    Specify the output format as JSON for AWS CLI commands"
   msg "example" "$(basename "$0") -b firefox"
-  msg "info"    "    Use Firefox as the browser for AWS SSO login"
+  msg "info" "    Use Firefox as the browser for AWS SSO login"
   msg "example" "$(basename "$0") -b none"
-  msg "info"    "    Use --no-browser option for AWS SSO login"
+  msg "info" "    Use --no-browser option for AWS SSO login"
   msg "example" "$(basename "$0") -c"
-  msg "info"    "    Check for available updates"
+  msg "info" "    Check for available updates"
   msg "example" "$(basename "$0") -v"
-  msg "info"    "    Enable verbose mode"
+  msg "info" "    Enable verbose mode"
   echo
-  
+
   msg "section" "Version: ${VERSION}"
 }
 
 change_region() {
   trap 'exit 2' SIGINT
-  
+
   # Get the list of available regions for the current profile context
   echo -n "${bl}Fetching available regions...${nc}"
   REGIONS=$(aws ec2 describe-regions --query "Regions[].RegionName" --output json | jq -r '.[]' | sort)
   echo "${gr}✓${nc}"
-  
-  if [[ -z "$REGIONS" ]]; then
+
+  if [[ -z $REGIONS ]]; then
     error "Failed to fetch regions. Please ensure you have permissions to list regions." "❌"
     exit 1
   fi
-  
+
   # Create colored region display for fzf
   REGION_DISPLAY=""
   while read -r region; do
-    case "${region%%-*}" in  # Match on prefix only
-      us)  # United States
-        REGION_DISPLAY+="${bl}${region}${nc}\n"
-        ;;
-      af)  # Africa
-        REGION_DISPLAY+="${gr}${region}${nc}\n"
-        ;;
-      ap)  # Asia Pacific
-        REGION_DISPLAY+="${rd}${region}${nc}\n"
-        ;;
-      ca)  # Canada
-        REGION_DISPLAY+="${wh}${region}${nc}\n"
-        ;;
-      eu)  # Europe
-        REGION_DISPLAY+="${yl}${region}${nc}\n"
-        ;;
-      il)  # Israel
-        REGION_DISPLAY+="${cy}${region}${nc}\n"
-        ;;
-      mx)  # Mexico
-        REGION_DISPLAY+="${or}${region}${nc}\n"
-        ;;
-      me)  # Middle East
-        REGION_DISPLAY+="${mg}${region}${nc}\n"
-        ;;
-      sa)  # South America
-        REGION_DISPLAY+="${gy}${region}${nc}\n"
-        ;;
-      *)  # Default case
-        REGION_DISPLAY+="${wh}${region}${nc}\n"
-        ;;
+    case "${region%%-*}" in # Match on prefix only
+    us)                     # United States
+      REGION_DISPLAY+="${bl}${region}${nc}\n"
+      ;;
+    af) # Africa
+      REGION_DISPLAY+="${gr}${region}${nc}\n"
+      ;;
+    ap) # Asia Pacific
+      REGION_DISPLAY+="${rd}${region}${nc}\n"
+      ;;
+    ca) # Canada
+      REGION_DISPLAY+="${wh}${region}${nc}\n"
+      ;;
+    eu) # Europe
+      REGION_DISPLAY+="${yl}${region}${nc}\n"
+      ;;
+    il) # Israel
+      REGION_DISPLAY+="${cy}${region}${nc}\n"
+      ;;
+    mx) # Mexico
+      REGION_DISPLAY+="${or}${region}${nc}\n"
+      ;;
+    me) # Middle East
+      REGION_DISPLAY+="${mg}${region}${nc}\n"
+      ;;
+    sa) # South America
+      REGION_DISPLAY+="${gy}${region}${nc}\n"
+      ;;
+    *) # Default case
+      REGION_DISPLAY+="${wh}${region}${nc}\n"
+      ;;
     esac
-  done <<< "$REGIONS"
-  
+  done <<<"$REGIONS"
+
   # Remove trailing newline from REGION_DISPLAY
   REGION_DISPLAY=${REGION_DISPLAY%\\n}
-  
+
   # Let user select region via fzf
   SELECTED_REGION=$(echo -e "$REGION_DISPLAY" | fzf --ansi --height=50% --header="Select a region to switch to:")
-  if [[ -z "$SELECTED_REGION" ]]; then
+  if [[ -z $SELECTED_REGION ]]; then
     exit 0
   fi
-  
+
   # Remove color codes from selection
   SELECTED_REGION=$(echo "$SELECTED_REGION" | sed -E "s/\x1B\[[0-9;]*[mK]//g")
-  
+
   # Update the default profile's region in AWS config
   awk -v new_region="$SELECTED_REGION" '
     BEGIN { in_default = 0 }
@@ -1195,70 +1196,76 @@ change_region() {
     /^\[/ { in_default = 0; print; next }
     in_default && /^region =/ { print "region = " new_region; next }
     { print }
-  ' "$AWS_CONFIG_FILE" > "$CTX_CONFIG"
-  
+  ' "$AWS_CONFIG_FILE" >"$CTX_CONFIG"
+
   mv "$CTX_CONFIG" "$AWS_CONFIG_FILE"
   msg "success" "Updated default profile region to: $SELECTED_REGION" "🌍"
 }
 
 while getopts ":b:cghikmvo:r" opt; do
   case $opt in
-    b) BROWSER_OVERRIDE="$OPTARG" ;;
-    c) check_for_updates; exit 0 ;;
-    g)
-      GENERATE_CONFIG="true"
-      if [[ -z "$OUTPUT_FORMAT" ]]; then
-        validate_output
-      fi
-      ;;
-    h) usage; exit 0 ;;
-    i) setup_aws_config ;;
-    k)
-      check_command "kubectl" "https://kubernetes.io/docs/tasks/tools/"
-      echo -n "${bl}Detecting EKS clusters... (This can take a while)${nc}"
-      use_spinner detect_eks_clusters
-      echo "${bl}Detecting EKS clusters...${gr}✓${nc}"
-      exit 0
-      ;;
-    m)
-      CURRENT_PROFILE=$(grep -b2 "$(aws configure get profile.default.sso_account_id)" ~/.aws/config | grep 'profile' | cut -d' ' -f2 | cut -d']' -f1)
-      echo "${mg}Generating AWS Region Heatmap for $CURRENT_PROFILE...${nc}"
-      regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
-      calculate_region_counts || {
-        error "Failed to calculate region counts" "❌"
-        exit 1
-      }
-      print_heatmap || {
-        error "Failed to print heatmap" "❌"
-        exit 1
-      }
-      exit 0
-      ;;
-    o) OUTPUT_FORMAT="$OPTARG" ;;
-    r)
-      change_region
-      exit 0
-      ;;
-    v)
-      DEBUG=true
-      set -x
-      ;;
-    \?)
-      echo "${rd}Invalid option: -$OPTARG 👮🏻‍♂️${nc}"
-      usage
+  b) BROWSER_OVERRIDE="$OPTARG" ;;
+  c)
+    check_for_updates
+    exit 0
+    ;;
+  g)
+    GENERATE_CONFIG="true"
+    if [[ -z $OUTPUT_FORMAT ]]; then
+      validate_output
+    fi
+    ;;
+  h)
+    usage
+    exit 0
+    ;;
+  i) setup_aws_config ;;
+  k)
+    check_command "kubectl" "https://kubernetes.io/docs/tasks/tools/"
+    echo -n "${bl}Detecting EKS clusters... (This can take a while)${nc}"
+    use_spinner detect_eks_clusters
+    echo "${bl}Detecting EKS clusters...${gr}✓${nc}"
+    exit 0
+    ;;
+  m)
+    CURRENT_PROFILE=$(grep -b2 "$(aws configure get profile.default.sso_account_id)" ~/.aws/config | grep 'profile' | cut -d' ' -f2 | cut -d']' -f1)
+    echo "${mg}Generating AWS Region Heatmap for $CURRENT_PROFILE...${nc}"
+    regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
+    calculate_region_counts || {
+      error "Failed to calculate region counts" "❌"
       exit 1
-      ;;
-    :)
-      echo "${rd}Option -$OPTARG requires an argument 😑${nc}"
-      usage
+    }
+    print_heatmap || {
+      error "Failed to print heatmap" "❌"
       exit 1
-      ;;
+    }
+    exit 0
+    ;;
+  o) OUTPUT_FORMAT="$OPTARG" ;;
+  r)
+    change_region
+    exit 0
+    ;;
+  v)
+    DEBUG=true
+    set -x
+    ;;
+  \?)
+    echo "${rd}Invalid option: -$OPTARG 👮🏻‍♂️${nc}"
+    usage
+    exit 1
+    ;;
+  :)
+    echo "${rd}Option -$OPTARG requires an argument 😑${nc}"
+    usage
+    exit 1
+    ;;
   esac
 done
 
 validate_token
 
-if [[ "$GENERATE_CONFIG" == "true" ]]; then
+if [[ $GENERATE_CONFIG == "true" ]]; then
   generate_config
   exit 0
 fi
@@ -1267,24 +1274,24 @@ CONTEXT_READY="true"
 
 change_context() {
   trap 'exit 2' SIGINT
-  
+
   # Declare associative arrays with -A flag
   declare -A account_roles=()
   declare -A account_ids=()
-  
+
   # First, build a map of accounts to their roles and IDs
   while read -r profile; do
     # Get the role and account name directly from the config file instead of parsing the profile name
     account_id=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_account_id' | awk -F' = ' '{print $2}')
     role_name=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_role_name' | awk -F' = ' '{print $2}')
     account_name=$profile
-    account_name=${account_name#*@}  # Remove everything before @ if it exists
-    
+    account_name=${account_name#*@} # Remove everything before @ if it exists
+
     # Store the account ID
     account_ids[$account_name]=$account_id
-    
+
     # Append role to the account's roles list
-    if [[ -z "${account_roles[$account_name]+x}" ]]; then
+    if [[ -z ${account_roles[$account_name]+x} ]]; then
       account_roles[$account_name]="$role_name"
     else
       account_roles[$account_name]="${account_roles[$account_name]}, $role_name"
@@ -1301,16 +1308,16 @@ change_context() {
 
   # First selection: Choose the account
   SELECTED_ACCOUNT=$(echo -e "$ACCOUNT_DISPLAY" | fzf --ansi --height=50% --header='Select an AWS account. Type to filter by name, ID, or roles:')
-  if [[ -z "$SELECTED_ACCOUNT" ]]; then
+  if [[ -z $SELECTED_ACCOUNT ]]; then
     exit 0
   fi
 
   # Extract the account name from the selection (remove colors and extra info)
   ACCOUNT_NAME=$(echo "$SELECTED_ACCOUNT" | sed -E "s/\x1B\[[0-9;]*[mK]//g" | awk -F' \\(' '{print $1}')
-  
+
   # Get roles for the selected account
-  IFS=', ' read -r -a ROLES <<< "${account_roles[$ACCOUNT_NAME]}"
-  
+  IFS=', ' read -r -a ROLES <<<"${account_roles[$ACCOUNT_NAME]}"
+
   # If there's only one role, use it directly
   if [[ ${#ROLES[@]} -eq 1 ]]; then
     SELECTED_ROLE="${ROLES[0]}"
@@ -1322,9 +1329,9 @@ change_context() {
     done
     # Remove trailing newline
     ROLE_DISPLAY=${ROLE_DISPLAY%\\n}
-    
+
     SELECTED_ROLE=$(echo -e "$ROLE_DISPLAY" | fzf --ansi --height=50% --header="Select a role for ${wh}${ACCOUNT_NAME}${nc}:")
-    if [[ -z "$SELECTED_ROLE" ]]; then
+    if [[ -z $SELECTED_ROLE ]]; then
       exit 0
     fi
     # Remove color codes from selection
@@ -1335,7 +1342,7 @@ change_context() {
   PROFILE_NAME="${SELECTED_ROLE}@${ACCOUNT_NAME}"
 
   # Create a temporary file for the new config
-  echo -n > "$CTX_CONFIG"
+  echo -n >"$CTX_CONFIG"
 
   # Write all non-default sections and the session block, ensuring exactly one newline at the end
   awk '
@@ -1353,7 +1360,7 @@ change_context() {
       }
     }
     END { if (!last_empty) print "" }
-  ' "$AWS_CONFIG_FILE" > "$CTX_CONFIG"
+  ' "$AWS_CONFIG_FILE" >"$CTX_CONFIG"
 
   # Get the new default section content first
   DEFAULT_CONTENT=$(awk -v profile="profile $PROFILE_NAME" '
@@ -1365,7 +1372,7 @@ change_context() {
   ' "$AWS_CONFIG_FILE")
 
   # If we didn't find content, try searching without the role prefix
-  if [[ -z "$DEFAULT_CONTENT" ]]; then
+  if [[ -z $DEFAULT_CONTENT ]]; then
     DEFAULT_CONTENT=$(awk -v account="$ACCOUNT_NAME" '
       BEGIN { found = 0 }
       $0 ~ "^\\[profile [^@]+@" account "\\]" { found = 1; next }
@@ -1375,9 +1382,9 @@ change_context() {
   fi
 
   # Only add the default section if we got content
-  if [[ -n "$DEFAULT_CONTENT" ]]; then
-    echo "[default]" >> "$CTX_CONFIG"
-    echo "$DEFAULT_CONTENT" >> "$CTX_CONFIG"
+  if [[ -n $DEFAULT_CONTENT ]]; then
+    echo "[default]" >>"$CTX_CONFIG"
+    echo "$DEFAULT_CONTENT" >>"$CTX_CONFIG"
   else
     error "Failed to get profile content for $PROFILE_NAME" "❌"
     exit 1
@@ -1389,6 +1396,6 @@ change_context() {
   msg "info" "To change the region, run: awsctx -r"
 }
 
-if [[ "$CONTEXT_READY" == "true" ]]; then
+if [[ $CONTEXT_READY == "true" ]]; then
   change_context
 fi
