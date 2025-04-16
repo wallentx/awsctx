@@ -32,7 +32,7 @@ msg() {
     local message="$2"
     local extra="${3:-}"  # Used for default value, icon, or other extras
     local response
-    
+
     case "$class" in
         "header")  echo "${bd}${mg}$message${nc}" ;;
         "success") echo "${gr}$message${extra:+ $extra}${nc}" ;;
@@ -45,12 +45,12 @@ msg() {
         "highlight") echo "${or}$message${nc}" ;;
         "section") echo "${cy}$message${nc}" ;;
         "status")  echo "${gy}$message${extra:+ $extra}${nc}" ;;
-        
+
         # Interactive prompts
         "question")
             local default="${extra:-}"
             local prompt
-            
+
             # Format based on default value
             if [[ "${default,,}" == "n" ]]; then
                 prompt="${mg}$message ${bl}[${gr}y${bl}/${rd}N${bl}]${nc}"
@@ -59,11 +59,11 @@ msg() {
             else
                 prompt="${mg}$message ${bl}[${gr}y${bl}/${rd}n${bl}]${nc}"
             fi
-            
+
             while true; do
                 echo -n "$prompt: "
                 read -r response
-                
+
                 # Handle empty response
                 if [[ -z "$response" ]]; then
                     [[ -n "$default" ]] && response="$default" && break
@@ -154,7 +154,7 @@ get_config_dir() {
 get_config_file() {
   local config_dir
   config_dir=$(get_config_dir)
-  
+
   if [[ "$config_dir" == "${HOME}" ]]; then
     echo "${HOME}/.awsctxrc"
   else
@@ -465,6 +465,10 @@ SESSION_BLOCK=$(cat <<-EOF
 sso_start_url = $SSO_START_URL
 sso_region = $SSO_REGION
 sso_registration_scopes = $SSO_REGISTRATION_SCOPES
+sso_client_name = awsctx
+sdk_ua_app_id = awsctx
+role_session_name = ${USER}_awsctx
+
 EOF
 )
 
@@ -884,16 +888,9 @@ write_config() {
       # Group by accountName to detect duplicates
       group_by(.accountName) |
       .[] |
-      # For each group, if there is more than one entry, append role name to accountName
-      if (length > 1) then
         .[] | . + {
-          displayName: "\(.accountName)-\(.sso_role_name)"
-        }
-      else
-        .[] | . + {
-          displayName: .accountName
-        }
-      end |
+          displayName: "\(.sso_role_name)@\(.accountName)"
+        } |
       # Output the profile configuration
       "[profile \(.displayName)]\n" +
       "sso_session = awsctx\n" +
@@ -1087,16 +1084,65 @@ CONTEXT_READY="true"
 
 change_context() {
   trap 'exit 2' SIGINT
-  PROFILE_DISPLAY=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //' | while read -r profile; do
-    ACCOUNT_ID=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_account_id' | awk -F' = ' '{print $2}')
-    ROLE_NAME=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_role_name' | awk -F' = ' '{print $2}')
-    printf "%s (%s) [%s]\n" "$profile" "$ACCOUNT_ID" "$ROLE_NAME"
-  done)
-  SELECTED_PROFILE=$(echo "$PROFILE_DISPLAY" | fzf --height=50% --header='Select an AWS account to switch to. Type to filter accounts by name, number, or role:')
-  if [[ -z "$SELECTED_PROFILE" ]]; then
+  
+  # First, build a map of accounts to their roles and IDs
+  declare -A account_roles account_ids
+  while read -r profile; do
+    account_name=$(echo "$profile" | cut -d'@' -f2)
+    role_name=$(echo "$profile" | cut -d'@' -f1)
+    account_id=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_account_id' | awk -F' = ' '{print $2}')
+    
+    # Store the account ID
+    account_ids["$account_name"]=$account_id
+    
+    # Append role to the account's roles list
+    if [[ -z "${account_roles[$account_name]}" ]]; then
+      account_roles["$account_name"]=$role_name
+    else
+      account_roles["$account_name"]="${account_roles[$account_name]}, $role_name"
+    fi
+  done < <(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //')
+
+  # Create the display string with colors for fzf
+  ACCOUNT_DISPLAY=""
+  for account_name in "${!account_roles[@]}"; do
+    ACCOUNT_DISPLAY+="${wh}${account_name}${nc} (${mg}${account_ids[$account_name]}${nc}) [${bl}${account_roles[$account_name]}${nc}]\n"
+  done
+
+  # First selection: Choose the account
+  SELECTED_ACCOUNT=$(echo -e "$ACCOUNT_DISPLAY" | fzf --ansi --height=50% --header='Select an AWS account. Type to filter by name, ID, or roles:')
+  if [[ -z "$SELECTED_ACCOUNT" ]]; then
     exit 0
   fi
-  PROFILE_NAME=$(echo "$SELECTED_PROFILE" | awk -F' ' '{print $1}')
+
+  # Extract the account name from the selection (remove colors and extra info)
+  ACCOUNT_NAME=$(echo "$SELECTED_ACCOUNT" | sed -E "s/\x1B\[[0-9;]*[mK]//g" | awk -F' \\(' '{print $1}')
+  
+  # Get roles for the selected account
+  IFS=', ' read -r -a ROLES <<< "${account_roles[$ACCOUNT_NAME]}"
+  
+  # If there's only one role, use it directly
+  if [[ ${#ROLES[@]} -eq 1 ]]; then
+    SELECTED_ROLE="${ROLES[0]}"
+  else
+    # Second selection: Choose the role
+    ROLE_DISPLAY=""
+    for role in "${ROLES[@]}"; do
+      ROLE_DISPLAY+="${bl}${role}${nc}\n"
+    done
+    
+    SELECTED_ROLE=$(echo -e "$ROLE_DISPLAY" | fzf --ansi --height=50% --header="Select a role for ${wh}${ACCOUNT_NAME}${nc}:")
+    if [[ -z "$SELECTED_ROLE" ]]; then
+      exit 0
+    fi
+    # Remove color codes from selection
+    SELECTED_ROLE=$(echo "$SELECTED_ROLE" | sed -E "s/\x1B\[[0-9;]*[mK]//g")
+  fi
+
+  # Construct the profile name
+  PROFILE_NAME="${SELECTED_ROLE}@${ACCOUNT_NAME}"
+
+  # Update the AWS config file
   awk '
       BEGIN {skip=0}
       /^\[default\]/ {skip=1}
@@ -1104,7 +1150,6 @@ change_context() {
       !skip {print}
   ' "$AWS_CONFIG_FILE" >"$CTX_CONFIG"
   echo "[default]" >>"$CTX_CONFIG"
-  # Use exact match for profile instead of substring match
   awk -v profile="profile $PROFILE_NAME" '
       $0 ~ "^\\[" profile "\\]$" {in_default = 1; next}
       /^\[/ && in_default {in_default = 0}
