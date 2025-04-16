@@ -1195,6 +1195,8 @@ change_context() {
   for account_name in "${!account_roles[@]}"; do
     ACCOUNT_DISPLAY+="${wh}${account_name}${nc} (${mg}${account_ids[$account_name]}${nc}) [${bl}${account_roles[$account_name]}${nc}]\n"
   done
+  # Remove trailing newline
+  ACCOUNT_DISPLAY=${ACCOUNT_DISPLAY%\\n}
 
   # First selection: Choose the account
   SELECTED_ACCOUNT=$(echo -e "$ACCOUNT_DISPLAY" | fzf --ansi --height=50% --header='Select an AWS account. Type to filter by name, ID, or roles:')
@@ -1217,6 +1219,8 @@ change_context() {
     for role in "${ROLES[@]}"; do
       ROLE_DISPLAY+="${bl}${role}${nc}\n"
     done
+    # Remove trailing newline
+    ROLE_DISPLAY=${ROLE_DISPLAY%\\n}
     
     SELECTED_ROLE=$(echo -e "$ROLE_DISPLAY" | fzf --ansi --height=50% --header="Select a role for ${wh}${ACCOUNT_NAME}${nc}:")
     if [[ -z "$SELECTED_ROLE" ]]; then
@@ -1229,21 +1233,59 @@ change_context() {
   # Construct the profile name
   PROFILE_NAME="${SELECTED_ROLE}@${ACCOUNT_NAME}"
 
-  # Update the AWS config file
+  # Create a temporary file for the new config
+  echo -n > "$CTX_CONFIG"
+
+  # Write all non-default sections and the session block, ensuring exactly one newline at the end
   awk '
-      BEGIN {skip=0}
-      /^\[default\]/ {skip=1}
-      /^\[/ {skip=0}
-      !skip {print}
-  ' "$AWS_CONFIG_FILE" >"$CTX_CONFIG"
-  echo "[default]" >>"$CTX_CONFIG"
-  awk -v profile="profile $PROFILE_NAME" '
-      $0 ~ "^\\[" profile "\\]$" {in_default = 1; next}
-      /^\[/ && in_default {in_default = 0}
-      in_default && NF {print}
-  ' "$AWS_CONFIG_FILE" | tail -n +1 >>"$CTX_CONFIG"
+    BEGIN { in_default = 0; print_line = 1; last_empty = 0 }
+    /^\[sso-session/ { in_default = 0; print_line = 1 }
+    /^\[default\]/ { in_default = 1; print_line = 0; next }
+    /^\[/ && !/^\[sso-session/ { in_default = 0; print_line = 1 }
+    print_line {
+      if (NF == 0) {
+        if (!last_empty) print
+        last_empty = 1
+      } else {
+        print
+        last_empty = 0
+      }
+    }
+    END { if (!last_empty) print "" }
+  ' "$AWS_CONFIG_FILE" > "$CTX_CONFIG"
+
+  # Get the new default section content first
+  DEFAULT_CONTENT=$(awk -v profile="profile $PROFILE_NAME" '
+    BEGIN { found = 0 }
+    # Match either the exact profile name or just the account name for single-role accounts
+    $0 ~ "^\\[" profile "\\]" || $0 ~ "^\\[profile " profile "\\]" { found = 1; next }
+    /^\[/ && found { exit }
+    found && NF { print }
+  ' "$AWS_CONFIG_FILE")
+
+  # If we didn't find content, try searching without the role prefix
+  if [[ -z "$DEFAULT_CONTENT" ]]; then
+    DEFAULT_CONTENT=$(awk -v account="$ACCOUNT_NAME" '
+      BEGIN { found = 0 }
+      $0 ~ "^\\[profile [^@]+@" account "\\]" { found = 1; next }
+      /^\[/ && found { exit }
+      found && NF { print }
+    ' "$AWS_CONFIG_FILE")
+  fi
+
+  # Only add the default section if we got content
+  if [[ -n "$DEFAULT_CONTENT" ]]; then
+    echo "[default]" >> "$CTX_CONFIG"
+    echo "$DEFAULT_CONTENT" >> "$CTX_CONFIG"
+  else
+    error "Failed to get profile content for $PROFILE_NAME" "❌"
+    exit 1
+  fi
+
+  # Replace the old config with the new one
   mv "$CTX_CONFIG" "$AWS_CONFIG_FILE"
   msg "success" "Switched default profile to: $PROFILE_NAME" "🔀"
+  msg "info" "To change the region, run: awsctx -r"
 }
 
 if [[ "$CONTEXT_READY" == "true" ]]; then
