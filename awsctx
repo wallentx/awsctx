@@ -481,7 +481,6 @@ EOF
 )
 
 cleanup_temp_files() {
-  # Only attempt to remove files if their variables are set and the files exist
   [[ -n $ACCOUNTS_LIST && -f $ACCOUNTS_LIST ]] && rm -f "$ACCOUNTS_LIST"
   [[ -n $ACCOUNTS_ROLES && -f $ACCOUNTS_ROLES ]] && rm -f "$ACCOUNTS_ROLES"
   [[ -n $CTX_CONFIG && -f $CTX_CONFIG ]] && rm -f "$CTX_CONFIG"
@@ -893,13 +892,11 @@ write_config() {
 
     # Write account profiles
     jq -r '
-      # Group by accountName to detect duplicates
       group_by(.accountName) |
       .[] |
         .[] | . + {
           displayName: "\(.sso_role_name)@\(.accountName)"
         } |
-      # Output the profile configuration
       "[profile \(.displayName)]\n" +
       "sso_session = awsctx\n" +
       "sso_account_id = \(.accountId | gsub("\"";""))\n" +
@@ -920,8 +917,8 @@ write_config() {
   # Copy temporary file to final config file
   cp "${AWS_CONFIG_PROFILES}" "${AWS_CONFIG_FILE}"
 
-  msg "success" "AWS profiles have been successfully generated, and written to: ${AWS_CONFIG_FILE} ✅"
-  msg "info" "You can now use '${bl}${bd}awsctx${nc}' to switch between AWS accounts and roles 🏁"
+  success "AWS profiles have been successfully generated, and written to: ${AWS_CONFIG_FILE}" "✅"
+  info "You can now use '${bl}${bd}awsctx${nc}' to switch between AWS accounts and roles 🏁"
 }
 
 generate_config() {
@@ -1148,34 +1145,34 @@ change_region() {
   REGION_DISPLAY=""
   while read -r region; do
     case "${region%%-*}" in # Match on prefix only
-    us)                     # United States
+    us)
       REGION_DISPLAY+="${bl}${region}${nc}\n"
       ;;
-    af) # Africa
+    af)
       REGION_DISPLAY+="${gr}${region}${nc}\n"
       ;;
-    ap) # Asia Pacific
+    ap)
       REGION_DISPLAY+="${rd}${region}${nc}\n"
       ;;
-    ca) # Canada
+    ca)
       REGION_DISPLAY+="${wh}${region}${nc}\n"
       ;;
-    eu) # Europe
+    eu)
       REGION_DISPLAY+="${yl}${region}${nc}\n"
       ;;
-    il) # Israel
+    il)
       REGION_DISPLAY+="${cy}${region}${nc}\n"
       ;;
-    mx) # Mexico
+    mx)
       REGION_DISPLAY+="${or}${region}${nc}\n"
       ;;
-    me) # Middle East
+    me)
       REGION_DISPLAY+="${mg}${region}${nc}\n"
       ;;
-    sa) # South America
+    sa)
       REGION_DISPLAY+="${gy}${region}${nc}\n"
       ;;
-    *) # Default case
+    *)
       REGION_DISPLAY+="${wh}${region}${nc}\n"
       ;;
     esac
