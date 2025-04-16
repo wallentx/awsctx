@@ -132,6 +132,10 @@ ask() { msg "question" "$1" "${2:-}"; }
 prompt() { msg "input" "$1"; }
 prompt_default() { msg "input_default" "$1" "$2"; }
 select_option() { msg "select" "$1" "${@:2}"; }
+title() { msg "header" "$1"; }
+option() { msg "code" "$1"; }
+section() { msg "section" "$1"; }
+example() { msg "example" "$1"; }
 
 # Initialize variables
 DEBUG=false
@@ -1074,57 +1078,57 @@ check_for_updates() {
 }
 
 usage() {
-  msg "title" "AWS Context Manager"
+  title "AWS Context Manager"
   echo
 
-  msg "section" "Description:"
-  msg "info" "This script helps interact with multiple AWS account profiles by generating an AWS"
-  msg "info" "config that includes profiles for all accounts and roles associated with an AWS SSO"
-  msg "info" "profile."
-  msg "info" "Once the profiles are generated, you can use $(basename "$0") (with no options)"
-  msg "info" "to select from a list of accounts, and easily search/switch between them."
+  section "Description:"
+  info "This script helps interact with multiple AWS account profiles by generating an AWS"
+  info "config that includes profiles for all accounts and roles associated with an AWS SSO"
+  info "profile."
+  info "Once the profiles are generated, you can use $(basename "$0") (with no options)"
+  info "to select from a list of accounts, and easily search/switch between them."
   echo
 
-  msg "section" "Usage: $(basename "$0") [options]"
+  section "Usage: $(basename "$0") [options]"
   echo
 
-  msg "section" "Options:"
-  msg "option" "-b <browser>           Specify the browser to use for AWS SSO login."
-  msg "info" "                       Use 'none' to disable browser and use --no-browser option."
-  msg "option" "-c                     Check for updates"
-  msg "option" "-g                     Generate AWS config profiles from AWS SSO"
-  msg "option" "-i                     Initialize AWS SSO configuration and login"
-  msg "option" "-k                     Detect EKS clusters and update kubeconfig"
-  msg "option" "-m                     Generate an AWS Region Heatmap for the current profile"
-  msg "option" "-o <output_format>     Specify the output format for AWS CLI commands"
-  msg "info" "                       Valid options: json, text, table, yaml, yaml-stream"
-  msg "option" "-r                     Change region for the current context"
-  msg "option" "-v                     Enable verbose mode"
-  msg "option" "-h, --help            Display this help message and exit"
+  section "Options:"
+  option "-b <browser>           Specify the browser to use for AWS SSO login."
+  option "                       Use 'none' to disable browser and use --no-browser option."
+  option "-c                     Check for updates"
+  option "-g                     Generate AWS config profiles from AWS SSO"
+  option "-i                     Initialize AWS SSO configuration and login"
+  option "-k                     Detect EKS clusters and update kubeconfig"
+  option "-m                     Generate an AWS Region Heatmap for the current profile"
+  option "-o <output_format>     Specify the output format for AWS CLI commands"
+  option "                       Valid options: json, text, table, yaml, yaml-stream"
+  option "-r                     Change region for the current context"
+  option "-v                     Enable verbose mode"
+  option "-h, --help            Display this help message and exit"
   echo
 
-  msg "section" "Examples:"
-  msg "example" "$(basename "$0") -i"
-  msg "info" "    Initialize AWS SSO configuration and login"
-  msg "example" "$(basename "$0") -g"
-  msg "info" "    Generate AWS config profiles from AWS SSO"
-  msg "example" "$(basename "$0") -k"
-  msg "info" "    Detect EKS clusters and update kubeconfig"
-  msg "example" "$(basename "$0") -m"
-  msg "info" "    Generate an AWS Region Heatmap for the current profile"
-  msg "example" "$(basename "$0") -o json"
-  msg "info" "    Specify the output format as JSON for AWS CLI commands"
-  msg "example" "$(basename "$0") -b firefox"
-  msg "info" "    Use Firefox as the browser for AWS SSO login"
-  msg "example" "$(basename "$0") -b none"
-  msg "info" "    Use --no-browser option for AWS SSO login"
-  msg "example" "$(basename "$0") -c"
-  msg "info" "    Check for available updates"
-  msg "example" "$(basename "$0") -v"
-  msg "info" "    Enable verbose mode"
+  section "Examples:"
+  example "$(basename "$0") -i"
+  info "    Initialize AWS SSO configuration and login"
+  example "$(basename "$0") -g"
+  info "    Generate AWS config profiles from AWS SSO"
+  example "$(basename "$0") -k"
+  info "    Detect EKS clusters and update kubeconfig"
+  example "$(basename "$0") -m"
+  info "    Generate an AWS Region Heatmap for the current profile"
+  example "$(basename "$0") -o json"
+  info "    Specify the output format as JSON for AWS CLI commands"
+  example "$(basename "$0") -b firefox"
+  info "    Use Firefox as the browser for AWS SSO login"
+  example "$(basename "$0") -b none"
+  info "    Use --no-browser option for AWS SSO login"
+  example "$(basename "$0") -c"
+  info "    Check for available updates"
+  example "$(basename "$0") -v"
+  info "    Enable verbose mode"
   echo
 
-  msg "section" "Version: ${VERSION}"
+  section "Version: ${VERSION}"
 }
 
 change_region() {
@@ -1298,9 +1302,12 @@ change_context() {
     fi
   done < <(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //')
 
-  # Create the display string with colors for fzf
+  # Get sorted account names
+  readarray -t sorted_accounts < <(printf '%s\n' "${!account_roles[@]}" | sort)
+
+  # Create the display string with colors for fzf, sorted alphabetically
   ACCOUNT_DISPLAY=""
-  for account_name in "${!account_roles[@]}"; do
+  for account_name in "${sorted_accounts[@]}"; do
     ACCOUNT_DISPLAY+="${wh}${account_name}${nc} (${mg}${account_ids[$account_name]}${nc}) [${bl}${account_roles[$account_name]}${nc}]\n"
   done
   # Remove trailing newline
@@ -1322,6 +1329,9 @@ change_context() {
   if [[ ${#ROLES[@]} -eq 1 ]]; then
     SELECTED_ROLE="${ROLES[0]}"
   else
+    # Sort roles alphabetically
+    readarray -t ROLES < <(printf '%s\n' "${ROLES[@]}" | sort)
+    
     # Second selection: Choose the role
     ROLE_DISPLAY=""
     for role in "${ROLES[@]}"; do
@@ -1392,8 +1402,8 @@ change_context() {
 
   # Replace the old config with the new one
   mv "$CTX_CONFIG" "$AWS_CONFIG_FILE"
-  msg "success" "Switched default profile to: $PROFILE_NAME" "🔀"
-  msg "info" "To change the region, run: awsctx -r"
+  success "Switched default profile to: $PROFILE_NAME" "🔀"
+  info "To change the region, run: awsctx -r"
 }
 
 if [[ $CONTEXT_READY == "true" ]]; then
