@@ -995,9 +995,10 @@ ${cy}Options:${nc}
   ${yl}-g${nc}                     Generate AWS config profiles from AWS SSO
   ${yl}-i${nc}                     Initialize AWS SSO configuration and login
   ${yl}-k${nc}                     Detect EKS clusters and update kubeconfig
+  ${yl}-m${nc}                     Generate an AWS Region Heatmap for the current profile
   ${yl}-o ${bl}<output_format>${nc}     Specify the output format for AWS CLI commands
                          Valid options: ${it}json${nc}, ${it}text${nc}, ${it}table${nc}, ${it}yaml${nc}, ${it}yaml-stream${nc}
-  ${yl}-r${nc}                     Generate an AWS Region Heatmap for the current profile
+  ${yl}-r${nc}                     Change region for the current context
   ${yl}-v${nc}                     Enable verbose mode
   ${yl}-h, --help${nc}             Display this help message and exit
 
@@ -1008,6 +1009,8 @@ ${cy}Examples:${nc}
       Generate AWS config profiles from AWS SSO
   ${it}${gr}$(basename "$0") -k${nc}
       Detect EKS clusters and update kubeconfig
+  ${it}${gr}$(basename "$0") -m${nc}
+      Generate an AWS Region Heatmap for the current profile
   ${it}${gr}$(basename "$0") -o json${nc}
       Specify the output format as JSON for AWS CLI commands
   ${it}${gr}$(basename "$0") -b firefox${nc}
@@ -1020,7 +1023,82 @@ ${cy}Examples:${nc}
 EOF
 }
 
-while getopts "b:ghikvo:r" opt; do
+change_region() {
+  trap 'exit 2' SIGINT
+  
+  # Get the list of available regions for the current profile context
+  echo -n "${bl}Fetching available regions...${nc}"
+  REGIONS=$(aws ec2 describe-regions --query "Regions[].RegionName" --output json | jq -r '.[]' | sort)
+  echo "${gr}✓${nc}"
+  
+  if [[ -z "$REGIONS" ]]; then
+    error "Failed to fetch regions. Please ensure you have permissions to list regions." "❌"
+    exit 1
+  fi
+  
+  # Create colored region display for fzf
+  REGION_DISPLAY=""
+  while read -r region; do
+    case "${region%%-*}" in  # Match on prefix only
+      us)  # United States
+        REGION_DISPLAY+="${bl}${region}${nc}\n"
+        ;;
+      af)  # Africa
+        REGION_DISPLAY+="${gr}${region}${nc}\n"
+        ;;
+      ap)  # Asia Pacific
+        REGION_DISPLAY+="${rd}${region}${nc}\n"
+        ;;
+      ca)  # Canada
+        REGION_DISPLAY+="${wh}${region}${nc}\n"
+        ;;
+      eu)  # Europe
+        REGION_DISPLAY+="${yl}${region}${nc}\n"
+        ;;
+      il)  # Israel
+        REGION_DISPLAY+="${cy}${region}${nc}\n"
+        ;;
+      mx)  # Mexico
+        REGION_DISPLAY+="${or}${region}${nc}\n"
+        ;;
+      me)  # Middle East
+        REGION_DISPLAY+="${mg}${region}${nc}\n"
+        ;;
+      sa)  # South America
+        REGION_DISPLAY+="${gy}${region}${nc}\n"
+        ;;
+      *)  # Default case
+        REGION_DISPLAY+="${wh}${region}${nc}\n"
+        ;;
+    esac
+  done <<< "$REGIONS"
+  
+  # Remove trailing newline from REGION_DISPLAY
+  REGION_DISPLAY=${REGION_DISPLAY%\\n}
+  
+  # Let user select region via fzf
+  SELECTED_REGION=$(echo -e "$REGION_DISPLAY" | fzf --ansi --height=50% --header="Select a region to switch to:")
+  if [[ -z "$SELECTED_REGION" ]]; then
+    exit 0
+  fi
+  
+  # Remove color codes from selection
+  SELECTED_REGION=$(echo "$SELECTED_REGION" | sed -E "s/\x1B\[[0-9;]*[mK]//g")
+  
+  # Update the default profile's region in AWS config
+  awk -v new_region="$SELECTED_REGION" '
+    BEGIN { in_default = 0 }
+    /^\[default\]/ { in_default = 1; print; next }
+    /^\[/ { in_default = 0; print; next }
+    in_default && /^region =/ { print "region = " new_region; next }
+    { print }
+  ' "$AWS_CONFIG_FILE" > "$CTX_CONFIG"
+  
+  mv "$CTX_CONFIG" "$AWS_CONFIG_FILE"
+  msg "success" "Updated default profile region to: $SELECTED_REGION" "🌍"
+}
+
+while getopts "b:ghikmvo:r" opt; do
   case $opt in
   b) BROWSER_OVERRIDE="$OPTARG" ;;
   g) 
@@ -1041,8 +1119,7 @@ while getopts "b:ghikvo:r" opt; do
     echo "${bl}Detecting EKS clusters...${gr}✓${nc}"
     exit 0
     ;;
-  o) OUTPUT_FORMAT="$OPTARG" ;;
-  r)
+  m)
     CURRENT_PROFILE=$(grep -b2 "$(aws configure get profile.default.sso_account_id)" ~/.aws/config | grep 'profile' | cut -d' ' -f2 | cut -d']' -f1)
     echo "${mg}Generating AWS Region Heatmap for $CURRENT_PROFILE...${nc}"
     regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
@@ -1054,6 +1131,11 @@ while getopts "b:ghikvo:r" opt; do
       error "Failed to print heatmap" "❌"
       exit 1
     }
+    exit 0
+    ;;
+  o) OUTPUT_FORMAT="$OPTARG" ;;
+  r)
+    change_region
     exit 0
     ;;
   v)
@@ -1085,21 +1167,26 @@ CONTEXT_READY="true"
 change_context() {
   trap 'exit 2' SIGINT
   
+  # Declare associative arrays with -A flag
+  declare -A account_roles=()
+  declare -A account_ids=()
+  
   # First, build a map of accounts to their roles and IDs
-  declare -A account_roles account_ids
   while read -r profile; do
-    account_name=$(echo "$profile" | cut -d'@' -f2)
-    role_name=$(echo "$profile" | cut -d'@' -f1)
+    # Get the role and account name directly from the config file instead of parsing the profile name
     account_id=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_account_id' | awk -F' = ' '{print $2}')
+    role_name=$(grep -A 3 "\[profile $profile\]" "$AWS_CONFIG_FILE" | grep 'sso_role_name' | awk -F' = ' '{print $2}')
+    account_name=$profile
+    account_name=${account_name#*@}  # Remove everything before @ if it exists
     
     # Store the account ID
-    account_ids["$account_name"]=$account_id
+    account_ids[$account_name]=$account_id
     
     # Append role to the account's roles list
-    if [[ -z "${account_roles[$account_name]}" ]]; then
-      account_roles["$account_name"]=$role_name
+    if [[ -z "${account_roles[$account_name]+x}" ]]; then
+      account_roles[$account_name]="$role_name"
     else
-      account_roles["$account_name"]="${account_roles[$account_name]}, $role_name"
+      account_roles[$account_name]="${account_roles[$account_name]}, $role_name"
     fi
   done < <(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //')
 
@@ -1146,7 +1233,7 @@ change_context() {
   awk '
       BEGIN {skip=0}
       /^\[default\]/ {skip=1}
-      /^\[/ && !/^\[default\]/ {skip=0}
+      /^\[/ {skip=0}
       !skip {print}
   ' "$AWS_CONFIG_FILE" >"$CTX_CONFIG"
   echo "[default]" >>"$CTX_CONFIG"
