@@ -410,6 +410,18 @@ check_command() {
   fi
 }
 
+check_bash_version() {
+  local major_version=${BASH_VERSION%%.*}
+  if [[ $major_version -lt 5 ]]; then
+    error "Bash version 5 or higher is required" "🏚️"
+    info "You are currently running Bash version $BASH_VERSION"
+    info "Please upgrade your Bash installation"
+    info "On macOS, you can use: brew install bash"
+    info "On Linux, use your distribution's package manager"
+    exit 1
+  fi
+}
+
 check_aws_cli_v2() {
   if ! command -v aws &>/dev/null; then
     error "The 'aws' command could not be found" "🤷‍♂️"
@@ -426,6 +438,7 @@ check_aws_cli_v2() {
 }
 
 # Check dependencies
+check_bash_version
 check_command "jq" "https://github.com/jqlang/jq"
 check_command "fzf" "https://github.com/junegunn/fzf"
 check_aws_cli_v2
