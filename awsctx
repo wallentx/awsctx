@@ -965,71 +965,187 @@ process_profile() {
   local profile_name="$1"
   local temp_config="$2"
 
-  # Skip if this is eng_readonly and we have other roles for this account
-  local account_id
-  account_id=$(aws --profile "$profile_name" sts get-caller-identity --query "Account" --output text)
-  local role_name
-  role_name=$(echo "$profile_name" | awk -F'@' '{print $1}')
+  # Get list of all AWS regions and properly format them
+  local regions
+  regions=$(aws --profile "$profile_name" ec2 describe-regions --query "Regions[].RegionName" --output text 2>/dev/null | tr '\t' '\n' | sort) || {
+    echo "Failed to get regions for profile: $profile_name"
+    return 1
+  }
 
-  if [[ $role_name == "eng_readonly" ]]; then
-    # Count number of profiles for this account
-    local profile_count
-    profile_count=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" |
-      sed 's/^profile //' |
-      while IFS= read -r p; do
-        a=$(aws --profile "$p" sts get-caller-identity --query "Account" --output text 2>/dev/null)
-        if [[ $a == "$account_id" ]]; then
-          echo "$p"
-        fi
-      done | wc -l)
+  # Process each region
+  while IFS= read -r region; do
+    # Skip regions that are known to not have EKS (optional optimization)
+    case "$region" in
+      "ap-northeast-3") continue ;; # Osaka - Limited availability
+      "ap-southeast-4") continue ;; # Melbourne - Limited availability
+      "eu-south-2") continue ;;     # Spain - Limited availability
+      "eu-central-2") continue ;;   # Zurich - Limited availability
+      "il-central-1") continue ;;   # Israel - Limited availability
+    esac
 
-    if ((profile_count > 1)); then
-      return 0
-    fi
-  fi
+    # Try to list clusters in this region
+    local clusters
+    clusters=$(aws --profile "$profile_name" eks list-clusters --region "$region" --query "clusters[]" --output text 2>/dev/null) || continue
 
-  for region in $(aws --profile "$profile_name" ec2 describe-regions --query "Regions[].RegionName" --output text); do
-    clusters=$(aws --profile "$profile_name" eks list-clusters --region "$region" --query "clusters[]" --output text)
     if [[ -n $clusters ]]; then
-      for cluster in $clusters; do
-        echo "Updating kubeconfig for cluster: $cluster in region: $region with profile: $profile_name"
+      while IFS= read -r cluster; do
+        echo "Found cluster: $cluster in region: $region with profile: $profile_name"
         # Use just the cluster name instead of ARN, and suppress stdout
         KUBECONFIG="$temp_config" aws --profile "$profile_name" eks update-kubeconfig \
           --region "$region" \
           --name "$cluster" \
           --alias "$cluster" \
-          >/dev/null
-      done
+          >/dev/null || echo "Failed to update kubeconfig for cluster: $cluster in region: $region"
+      done < <(echo "$clusters" | tr '\t' '\n')
     fi
-  done
+  done < <(echo "$regions")
 }
 
 detect_eks_clusters() {
+  local temp_dir
+  
+  # Create temp directory for configs
+  temp_dir=$(mktemp -d "${KUBE_HOME}/configs.XXXXXX") || {
+    error "Failed to create temporary directory" "❌"
+    return 1
+  }
+
+  # Ensure cleanup happens on exit
+  trap 'rm -rf "$temp_dir"' EXIT
+
   [[ ! -d ${KUBE_HOME} ]] && mkdir -p "${KUBE_HOME}"
   [[ ! -f "${KUBE_HOME}/config" ]] && touch "${KUBE_HOME}/config"
 
-  # Create temp directory for configs
-  local temp_dir
-  temp_dir=$(mktemp -d "${KUBE_HOME}/configs.XXXXXX")
+  # Get all available accounts (everything after @ in profile names)
+  local all_accounts
+  all_accounts=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | 
+    sed 's/^profile //' | 
+    awk -F'@' '{print $2}' | 
+    sort -u)
 
-  # Export all necessary functions and variables
-  export KUBE_HOME
-  export -f process_profile
-  export -f msg
-  export -f error
-  export -f info
-  export -f warn
-  export -f success
+  # Create colored display for fzf
+  local account_display=""
+  while IFS= read -r account; do
+    account_display+="${wh}${account}${nc}\n"
+  done <<<"$all_accounts"
 
-  # Process profiles in parallel, each writing to its own temp file
+  # Remove trailing newline
+  account_display=${account_display%\\n}
+
+  # Let user select account(s) via fzf
+  local selected_accounts
+  selected_accounts=$(echo -e "$account_display" | fzf --ansi --multi --height=50% \
+    --header="Select account(s) to check for EKS clusters (TAB to multi-select, ENTER to confirm):" \
+    | sed -E "s/\x1B\[[0-9;]*[mK]//g") # Remove color codes
+
+  # If no selection was made, exit
+  if [[ -z $selected_accounts ]]; then
+    echo "No accounts selected. Exiting..."
+    return 0
+  fi
+
+  # Process each selected account
+  local selected_profiles=""
+  while IFS= read -r account; do
+    # Get all roles for this account
+    local account_roles
+    account_roles=$(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | 
+      sed 's/^profile //' | 
+      grep "@${account}$" | 
+      awk -F'@' '{print $1}' | 
+      sort -u)
+
+    # Count number of roles
+    local role_count
+    role_count=$(echo "$account_roles" | wc -l)
+
+    if [[ $role_count -eq 1 ]]; then
+      # If only one role, use it automatically
+      local role
+      role=$(echo "$account_roles" | head -n1)
+      selected_profiles+="${role}@${account}"$'\n'
+      echo "Using role ${bl}${role}${nc} for account ${wh}${account}${nc}"
+    else
+      # Create colored display for role selection
+      local role_display=""
+      while IFS= read -r role; do
+        role_display+="${bl}${role}${nc}\n"
+      done <<<"$account_roles"
+
+      # Remove trailing newline
+      role_display=${role_display%\\n}
+
+      echo "Selecting roles for account: ${wh}${account}${nc}"
+      # Let user select multiple roles
+      local selected_roles
+      selected_roles=$(echo -e "$role_display" | fzf --ansi --multi --height=50% \
+        --header="Select role(s) to use for ${account} (TAB to multi-select, ENTER to confirm):" \
+        | sed -E "s/\x1B\[[0-9;]*[mK]//g")
+
+      if [[ -n $selected_roles ]]; then
+        while IFS= read -r selected_role; do
+          selected_profiles+="${selected_role}@${account}"$'\n'
+          echo "Selected role ${bl}${selected_role}${nc} for account ${wh}${account}${nc}"
+        done <<<"$selected_roles"
+      fi
+    fi
+  done <<<"$selected_accounts"
+
+  # Remove trailing newline
+  selected_profiles=${selected_profiles%$'\n'}
+
+  if [[ -z $selected_profiles ]]; then
+    echo "No profiles selected. Exiting..."
+    return 0
+  fi
+
+  echo
+  echo "Starting EKS cluster detection (processing 10 profiles at a time)..."
+  echo
+
+  # First create all temp files
+  declare -A profile_to_file=()  # Map to store profile to filename mapping
   while IFS= read -r profile; do
-    temp_file="${temp_dir}/${profile//\//_}.yaml"
-    touch "$temp_file"
-    bash -c "process_profile '$profile' '$temp_file'" &
-  done < <(awk -F '[][]' '/^\[profile / {print $2}' "$AWS_CONFIG_FILE" | sed 's/^profile //')
+    # Create a safe filename by replacing special characters
+    safe_filename=$(echo "$profile" | tr -c '[:alnum:]' '_')
+    temp_file="${temp_dir}/${safe_filename}.yaml"
+    touch "$temp_file" || {
+      error "Failed to create temporary file for profile: $profile" "❌"
+      return 1
+    }
+    profile_to_file["$profile"]="$temp_file"
+  done <<<"$selected_profiles"
 
-  # Wait for all background processes to complete
-  wait
+  # Now process in batches of 10
+  local batch_size=10
+  readarray -t profiles <<<"$selected_profiles"
+  local num_profiles=${#profiles[@]}
+  local batch_start=0
+
+  while ((batch_start < num_profiles)); do
+    local pids=()
+    local batch_end=$((batch_start + batch_size))
+    ((batch_end > num_profiles)) && batch_end=$num_profiles
+
+    # Process this batch
+    for ((i = batch_start; i < batch_end; i++)); do
+      local profile="${profiles[$i]}"
+      local temp_file="${profile_to_file[$profile]}"
+      echo "Processing profile: ${bl}${profile}${nc}"
+      process_profile "$profile" "$temp_file" &
+      pids+=($!)
+    done
+
+    # Wait for all processes in this batch
+    for pid in "${pids[@]}"; do
+      wait "$pid" 2>/dev/null || true
+    done
+
+    batch_start=$batch_end
+  done
+
+  echo
+  echo "EKS cluster detection complete. Merging kubeconfig files..."
 
   # Merge all configs
   local kubeconfigs="${KUBE_HOME}/config"
@@ -1040,12 +1156,21 @@ detect_eks_clusters() {
   done
 
   if [[ $kubeconfigs != "${KUBE_HOME}/config" ]]; then
-    KUBECONFIG="$kubeconfigs" kubectl config view --flatten >"${KUBE_HOME}/config.merged"
-    mv "${KUBE_HOME}/config.merged" "${KUBE_HOME}/config"
+    KUBECONFIG="$kubeconfigs" kubectl config view --flatten >"${KUBE_HOME}/config.merged" || {
+      error "Failed to merge kubeconfig files" "❌"
+      return 1
+    }
+    mv "${KUBE_HOME}/config.merged" "${KUBE_HOME}/config" || {
+      error "Failed to update kubeconfig file" "❌"
+      return 1
+    }
+    echo "Kubeconfig files merged successfully."
+  else
+    echo "No EKS clusters found in selected accounts."
   fi
 
-  # Cleanup
-  rm -rf "$temp_dir"
+  # Cleanup handled by trap
+  return 0
 }
 
 check_for_updates() {
@@ -1223,8 +1348,8 @@ while getopts ":b:cghikmvo:r" opt; do
   i) setup_aws_config ;;
   k)
     check_command "kubectl" "https://kubernetes.io/docs/tasks/tools/"
-    echo -n "${bl}Detecting EKS clusters... (This can take a while)${nc}"
-    use_spinner detect_eks_clusters
+    echo -n "${bl}Detecting EKS clusters...${nc}"
+    detect_eks_clusters
     echo "${bl}Detecting EKS clusters...${gr}✓${nc}"
     exit 0
     ;;
