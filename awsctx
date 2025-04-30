@@ -1015,8 +1015,11 @@ process_profile() {
 }
 
 detect_eks_clusters() {
-  local temp_dir
-  
+  local temp_dir=""
+
+  # Create KUBE_HOME directory if it doesn't exist
+  [[ ! -d ${KUBE_HOME} ]] && mkdir -p "${KUBE_HOME}"
+
   # Create temp directory for configs
   temp_dir=$(mktemp -d "${KUBE_HOME}/configs.XXXXXX") || {
     error "Failed to create temporary directory" "❌"
