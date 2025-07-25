@@ -125,6 +125,7 @@ msg() {
 
 # Aliases for common message types (optional, for convenience)
 code() { msg "code" "$1"; }
+highlight() { msg "highlight" "$1"; }
 error() { msg "error" "$1" "${2:-}"; }
 warn() { msg "warning" "$1" "${2:-}"; }
 info() { msg "info" "$1"; }
